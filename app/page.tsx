@@ -1,33 +1,19 @@
 "use client";
 
 import { ChangeEvent, CSSProperties, useMemo, useState } from "react";
+import {
+  auditConfiguration,
+  calculateAuditMetrics,
+  createAuditReport,
+  createSarifReport,
+  SECURITY_RULES,
+  type Finding,
+  type McpServer,
+  type ServerStatus,
+  type Severity,
+} from "../lib/audit-engine";
 
-type Severity = "critical" | "high" | "medium";
-type ServerStatus = "critical" | "attention" | "secure";
 type View = "overview" | "servers" | "rules" | "history";
-
-type Finding = {
-  id: string;
-  severity: Severity;
-  title: string;
-  description: string;
-  remediation: string;
-  snippet: string;
-  rule: string;
-};
-
-type McpServer = {
-  id: string;
-  name: string;
-  owner: string;
-  transport: string;
-  source: string;
-  score: number;
-  status: ServerStatus;
-  controls: number;
-  findings: Finding[];
-  lastScan: string;
-};
 
 const severityLabel: Record<Severity, string> = {
   critical: "Critique",
@@ -295,56 +281,7 @@ const demoServers: McpServer[] = [
   },
 ];
 
-const rules = [
-  {
-    code: "MCP-SEC-01",
-    title: "Gestion des secrets",
-    detail: "Détecte les jetons et mots de passe stockés en clair dans les configurations.",
-    category: "Secrets",
-  },
-  {
-    code: "MCP-AUTHZ-01",
-    title: "Moindre privilège",
-    detail: "Vérifie que les rôles, portées et chemins exposés sont limités au strict nécessaire.",
-    category: "Accès",
-  },
-  {
-    code: "MCP-NET-01",
-    title: "Transport chiffré",
-    detail: "Refuse HTTP et signale les transports distants sans authentification explicite.",
-    category: "Réseau",
-  },
-  {
-    code: "MCP-SUP-02",
-    title: "Versions verrouillées",
-    detail: "Signale les paquets latest, non versionnés ou récupérés dynamiquement.",
-    category: "Supply chain",
-  },
-  {
-    code: "MCP-EXEC-01",
-    title: "Exécution directe",
-    detail: "Détecte les shells intermédiaires et les commandes permettant une injection.",
-    category: "Exécution",
-  },
-  {
-    code: "MCP-EXEC-02",
-    title: "Isolation du processus",
-    detail: "Recherche les options qui désactivent sandbox, confirmations ou contrôles d’accès.",
-    category: "Exécution",
-  },
-  {
-    code: "MCP-AUDIT-01",
-    title: "Traçabilité",
-    detail: "Contrôle la présence d’une identité, d’un contexte et d’une journalisation exploitable.",
-    category: "Audit",
-  },
-  {
-    code: "MCP-DATA-01",
-    title: "Minimisation des données",
-    detail: "Identifie les accès globaux aux fichiers, bases ou espaces de connaissance.",
-    category: "Données",
-  },
-];
+const rules = SECURITY_RULES;
 
 const sampleConfig = `{
   "mcpServers": {
@@ -360,207 +297,6 @@ const sampleConfig = `{
     }
   }
 }`;
-
-function isSensitiveKey(key: string) {
-  return /(token|secret|password|passwd|api.?key|authorization|credential)/i.test(
-    key,
-  );
-}
-
-function containsConcreteSecret(value: unknown): boolean {
-  if (typeof value !== "string") return false;
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.startsWith("${") || trimmed.includes("<")) return false;
-  return trimmed.length >= 8;
-}
-
-function inspectForSecrets(value: unknown, parentKey = ""): boolean {
-  if (Array.isArray(value)) {
-    return value.some((item) => inspectForSecrets(item, parentKey));
-  }
-  if (value && typeof value === "object") {
-    return Object.entries(value as Record<string, unknown>).some(
-      ([key, child]) =>
-        (isSensitiveKey(key) && containsConcreteSecret(child)) ||
-        inspectForSecrets(child, key),
-    );
-  }
-  return isSensitiveKey(parentKey) && containsConcreteSecret(value);
-}
-
-function auditConfiguration(raw: string): McpServer[] {
-  const parsed = JSON.parse(raw) as Record<string, unknown>;
-  const container =
-    (parsed.mcpServers as Record<string, unknown> | undefined) ??
-    (parsed.servers as Record<string, unknown> | undefined) ??
-    parsed;
-
-  if (!container || typeof container !== "object" || Array.isArray(container)) {
-    throw new Error("Aucun objet de serveurs MCP n’a été trouvé.");
-  }
-
-  return Object.entries(container).map(([name, value], index) => {
-    const config =
-      value && typeof value === "object"
-        ? (value as Record<string, unknown>)
-        : {};
-    const command = String(config.command ?? "");
-    const url = String(config.url ?? "");
-    const args = Array.isArray(config.args)
-      ? config.args.map((item) => String(item))
-      : [];
-    const text = `${command} ${args.join(" ")} ${url}`.toLowerCase();
-    const findings: Finding[] = [];
-
-    if (inspectForSecrets(config)) {
-      findings.push(
-        makeFinding(
-          `${name}-secret`,
-          "critical",
-          "Secret stocké dans la configuration",
-          "Une valeur sensible semble être présente en clair. La valeur détectée n’est ni affichée ni conservée.",
-          "Révoquez la valeur si elle a été partagée, puis injectez-la depuis un coffre de secrets ou une variable d’environnement.",
-          `"env": {\n  "SERVICE_TOKEN": "\${SERVICE_TOKEN}"\n}`,
-          "MCP-SEC-01",
-        ),
-      );
-    }
-
-    if (url.startsWith("http://")) {
-      findings.push(
-        makeFinding(
-          `${name}-http`,
-          "critical",
-          "Transport HTTP non chiffré",
-          "Le point d’accès distant ne protège pas les données et jetons en transit.",
-          "Publiez ce serveur derrière HTTPS avec un certificat valide et bloquez les redirections vers HTTP.",
-          `"url": "${url.replace("http://", "https://")}"`,
-          "MCP-NET-01",
-        ),
-      );
-    }
-
-    if (/(bash|sh|cmd|powershell|pwsh)(\.exe)?$/i.test(command)) {
-      findings.push(
-        makeFinding(
-          `${name}-shell`,
-          "critical",
-          "Exécution via un shell",
-          "Un interpréteur de commandes augmente le risque d’injection et masque le binaire réellement exécuté.",
-          "Appelez directement le binaire ou le script du serveur avec une liste d’arguments explicite.",
-          `"command": "/opt/mcp/server"\n"args": ["--readonly"]`,
-          "MCP-EXEC-01",
-        ),
-      );
-    }
-
-    if (
-      /(no-sandbox|allow-all|skip-permission|disable-security|dangerously)/i.test(
-        text,
-      )
-    ) {
-      findings.push(
-        makeFinding(
-          `${name}-unsafe`,
-          "critical",
-          "Option de sécurité désactivée",
-          "Une option dangereuse contourne une protection d’isolation ou d’autorisation.",
-          "Supprimez ce paramètre et définissez explicitement les ressources et opérations autorisées.",
-          `"args": ["--readonly", "--workspace", "/workspace/project"]`,
-          "MCP-EXEC-02",
-        ),
-      );
-    }
-
-    const packageArg = args.find(
-      (arg) => !arg.startsWith("-") && /[a-z0-9@/_-]+/i.test(arg),
-    );
-    if (
-      command.toLowerCase().includes("npx") &&
-      packageArg &&
-      (!/@[^/]+$/.test(packageArg) || packageArg.endsWith("@latest"))
-    ) {
-      findings.push(
-        makeFinding(
-          `${name}-version`,
-          "high",
-          "Paquet non verrouillé",
-          "Le gestionnaire peut télécharger et exécuter une version différente sans revue préalable.",
-          "Indiquez une version exacte et effectuez les mises à jour dans une procédure contrôlée.",
-          `"args": ["-y", "${packageArg.replace(/@latest$/, "")}@1.0.0"]`,
-          "MCP-SUP-02",
-        ),
-      );
-    }
-
-    const broadPath = args.some(
-      (arg) =>
-        arg === "/" ||
-        /^[a-z]:\\?$/i.test(arg) ||
-        /^~[/\\]?$/.test(arg) ||
-        /users[/\\][^/\\]+$/i.test(arg),
-    );
-    if (broadPath || /filesystem/.test(text) && args.includes("/")) {
-      findings.push(
-        makeFinding(
-          `${name}-path`,
-          "critical",
-          "Accès fichiers trop large",
-          "Le serveur peut atteindre une racine système ou un répertoire utilisateur complet.",
-          "Montez uniquement un dossier de travail dédié et rendez-le accessible en lecture seule si possible.",
-          `"args": ["@modelcontextprotocol/server-filesystem@1.0.0", "/workspace/project"]`,
-          "MCP-AUTHZ-03",
-        ),
-      );
-    }
-
-    if (url.startsWith("https://") && !config.headers && !config.auth) {
-      findings.push(
-        makeFinding(
-          `${name}-auth`,
-          "medium",
-          "Authentification distante à confirmer",
-          "Aucun mécanisme d’authentification n’est visible dans cette configuration statique.",
-          "Vérifiez que le serveur impose OAuth 2.1 ou un jeton court, lié à l’audience et injecté hors configuration.",
-          `"headers": {\n  "Authorization": "Bearer \${MCP_ACCESS_TOKEN}"\n}`,
-          "MCP-AUTHN-01",
-        ),
-      );
-    }
-
-    const penalty = findings.reduce(
-      (sum, finding) =>
-        sum +
-        (finding.severity === "critical"
-          ? 28
-          : finding.severity === "high"
-            ? 17
-            : 8),
-      0,
-    );
-    const score = Math.max(12, 100 - penalty);
-    const status: ServerStatus = findings.some(
-      (finding) => finding.severity === "critical",
-    )
-      ? "critical"
-      : findings.length
-        ? "attention"
-        : "secure";
-
-    return {
-      id: `imported-${index}-${name}`,
-      name,
-      owner: "Non attribué",
-      transport: url ? (url.startsWith("https") ? "HTTPS" : "HTTP") : "Stdio",
-      source: "Import local",
-      score,
-      status,
-      controls: 8,
-      findings,
-      lastScan: "à l’instant",
-    };
-  });
-}
 
 function BrandMark() {
   return (
@@ -588,23 +324,7 @@ export default function Home() {
   const [toast, setToast] = useState("");
   const [lastAudit, setLastAudit] = useState("Aujourd’hui, 14:32");
 
-  const metrics = useMemo(() => {
-    const findings = servers.flatMap((server) => server.findings);
-    return {
-      score: servers.length
-        ? Math.round(
-            servers.reduce((sum, server) => sum + server.score, 0) /
-              servers.length,
-          )
-        : 0,
-      controls: servers.reduce((sum, server) => sum + server.controls, 0),
-      critical: findings.filter(
-        (finding) => finding.severity === "critical",
-      ).length,
-      toFix: findings.length,
-      secure: servers.filter((server) => server.status === "secure").length,
-    };
-  }, [servers]);
+  const metrics = useMemo(() => calculateAuditMetrics(servers), [servers]);
 
   const filteredServers = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
@@ -697,6 +417,37 @@ export default function Home() {
     window.setTimeout(() => setToast(""), 2200);
   };
 
+  const exportReport = (format: "json" | "sarif") => {
+    const generatedAt = new Date();
+    const report =
+      format === "sarif"
+        ? createSarifReport(servers, generatedAt)
+        : createAuditReport(servers, generatedAt);
+    const content = JSON.stringify(report, null, 2);
+    const blob = new Blob([content], {
+      type:
+        format === "sarif"
+          ? "application/sarif+json"
+          : "application/json",
+    });
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const date = generatedAt.toISOString().slice(0, 10);
+    link.href = downloadUrl;
+    link.download = `mcp-sentinel-${date}.${format}`;
+    link.click();
+    URL.revokeObjectURL(downloadUrl);
+    document
+      .querySelector<HTMLDetailsElement>(".export-menu[open]")
+      ?.removeAttribute("open");
+    setToast(
+      format === "sarif"
+        ? "Rapport SARIF exporté"
+        : "Rapport JSON exporté",
+    );
+    window.setTimeout(() => setToast(""), 2200);
+  };
+
   const navItems: { id: View; label: string; icon: string }[] = [
     { id: "overview", label: "Vue d’ensemble", icon: "⌂" },
     { id: "servers", label: "Serveurs", icon: "▦" },
@@ -772,6 +523,28 @@ export default function Home() {
               <i aria-hidden="true" />
               Dernier audit : {lastAudit}
             </span>
+            <details className="export-menu">
+              <summary className="button secondary">
+                <span aria-hidden="true">↓</span>
+                Exporter
+              </summary>
+              <div className="export-options">
+                <button onClick={() => exportReport("json")}>
+                  <span aria-hidden="true">{`{ }`}</span>
+                  <span>
+                    <strong>Rapport JSON</strong>
+                    <small>Inventaire complet et remédiations</small>
+                  </span>
+                </button>
+                <button onClick={() => exportReport("sarif")}>
+                  <span aria-hidden="true">◇</span>
+                  <span>
+                    <strong>Rapport SARIF</strong>
+                    <small>Compatible avec les outils de sécurité</small>
+                  </span>
+                </button>
+              </div>
+            </details>
             <button
               className="button secondary"
               onClick={() => setImportOpen(true)}
