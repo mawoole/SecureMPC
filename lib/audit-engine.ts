@@ -1,3 +1,8 @@
+import {
+  extractSupplyChainComponents,
+  type SupplyChainComponent,
+} from "./supply-chain.ts";
+
 export type Severity = "critical" | "high" | "medium";
 export type ServerStatus = "critical" | "attention" | "secure";
 export type ProbeStatus =
@@ -44,6 +49,7 @@ export type McpServer = {
   findings: Finding[];
   lastScan: string;
   probe?: PassiveProbe;
+  components?: SupplyChainComponent[];
 };
 
 export type SecurityRule = {
@@ -243,23 +249,6 @@ function hasConfiguredAuthentication(
 
   return Object.keys(config.headers as Record<string, unknown>).some((key) =>
     /(authorization|api.?key|token)/i.test(key),
-  );
-}
-
-function findPackageArgument(args: string[]): string | undefined {
-  return args.find(
-    (arg) =>
-      !arg.startsWith("-") &&
-      !arg.startsWith("/") &&
-      !/^[a-z]:[\\/]/i.test(arg) &&
-      /[a-z0-9@/_-]+/i.test(arg),
-  );
-}
-
-function isPackagePinned(packageName: string): boolean {
-  if (packageName.endsWith("@latest")) return false;
-  return /(?:^|\/)[^@/]+@\d+\.\d+\.\d+(?:[-+][a-z0-9.-]+)?$/i.test(
-    packageName,
   );
 }
 
@@ -509,6 +498,7 @@ export function auditConfiguration(raw: string): McpServer[] {
     const text = `${command} ${args.join(" ")} ${url}`.toLowerCase();
     const safeId = `${index}-${slugify(name)}`;
     const findings: Finding[] = [];
+    const components = extractSupplyChainComponents(config);
 
     if (inspectForSecrets(config) || urlContainsCredential(url)) {
       findings.push(
@@ -570,24 +560,35 @@ export function auditConfiguration(raw: string): McpServer[] {
       );
     }
 
-    const packageArgument = findPackageArgument(args);
-    if (
-      command.toLowerCase().includes("npx") &&
-      packageArgument &&
-      !isPackagePinned(packageArgument)
-    ) {
+    components.forEach((component, componentIndex) => {
+      if (
+        !["unpinned", "mutable"].includes(component.pinStatus) ||
+        component.ecosystem === "executable"
+      ) {
+        return;
+      }
+
+      const isContainer = component.ecosystem === "oci";
       findings.push(
         makeFinding(
-          `${safeId}-version`,
+          `${safeId}-version-${componentIndex}`,
           "high",
-          "Paquet non verrouillé",
-          "Le gestionnaire peut télécharger et exécuter une version différente sans revue préalable.",
-          "Indiquez une version exacte et effectuez les mises à jour dans une procédure contrôlée.",
-          `"args": ["-y", "${packageArgument.replace(/@latest$/, "")}@1.0.0"]`,
+          isContainer
+            ? "Image OCI non immuable"
+            : "Dépendance non verrouillée",
+          component.evidence,
+          isContainer
+            ? "Remplacez le tag par le digest SHA-256 exact de l’image revue et conservez le tag uniquement comme information lisible."
+            : "Indiquez une version exacte et effectuez les mises à jour dans une procédure contrôlée.",
+          isContainer
+            ? `"args": ["run", "${component.name}@sha256:<digest-validé>"]`
+            : component.ecosystem === "pypi"
+              ? `"args": ["${component.name}==1.0.0"]`
+              : `"args": ["-y", "${component.name}@1.0.0"]`,
           "MCP-SUP-02",
         ),
       );
-    }
+    });
 
     if (hasBroadFilesystemPath(args)) {
       findings.push(
@@ -648,6 +649,7 @@ export function auditConfiguration(raw: string): McpServer[] {
       controls: SECURITY_RULES.length,
       findings,
       lastScan: "à l’instant",
+      components,
     };
   });
 }
@@ -677,6 +679,7 @@ function cloneForReport(server: McpServer): McpServer {
   return {
     ...server,
     findings: server.findings.map((finding) => ({ ...finding })),
+    components: server.components?.map((component) => ({ ...component })),
   };
 }
 

@@ -45,3 +45,4 @@ next-env.d.ts
 
 # local MCP collector output (may contain infrastructure metadata)
 /mcp-inventory*.json
+/mcp-sbom*.cdx.json

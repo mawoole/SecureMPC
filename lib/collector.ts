@@ -10,6 +10,10 @@ import {
   resolve,
   win32,
 } from "node:path";
+import {
+  extractSupplyChainComponents,
+  type SupplyChainComponent,
+} from "./supply-chain.ts";
 
 export const COLLECTOR_SCHEMA_VERSION = "1.0" as const;
 export const MCP_PROTOCOL_VERSION = "2025-11-25";
@@ -59,6 +63,7 @@ export type CollectedServer = {
   };
   configuration: Record<string, unknown>;
   redactions: Redaction[];
+  components: SupplyChainComponent[];
   probe: PassiveProbe;
 };
 
@@ -760,6 +765,9 @@ export async function collectInventory(
       const sanitized = sanitizeConfiguration(
         value as Record<string, unknown>,
       );
+      const components = extractSupplyChainComponents(
+        sanitized.configuration,
+      );
       const probe = options.probe
         ? await probeConfiguration(sanitized.configuration, {
             timeoutMs: options.timeoutMs,
@@ -777,6 +785,7 @@ export async function collectInventory(
         },
         configuration: sanitized.configuration,
         redactions: sanitized.redactions,
+        components,
         probe,
       });
       sourceServerCount += 1;
@@ -799,7 +808,7 @@ export async function collectInventory(
     generatedAt: now().toISOString(),
     collector: {
       name: "MCP Sentinel Collector",
-      version: "1.0.0",
+      version: "1.1.0",
       platform: options.platform ?? process.platform,
       security: {
         secretsRedacted: true,

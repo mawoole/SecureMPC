@@ -1798,6 +1798,112 @@ button.table-row:hover {
   height: 100%;
 }
 
+.supply-chain-card {
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin-top: 12px;
+  padding: 13px 14px;
+}
+
+.supply-chain-heading {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+}
+
+.supply-chain-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.supply-chain-heading strong {
+  font-size: 11px;
+}
+
+.supply-chain-heading > span {
+  align-items: center;
+  background: var(--cobalt-soft);
+  border-radius: 7px;
+  color: var(--cobalt);
+  display: flex;
+  font-size: 12px;
+  height: 27px;
+  justify-content: center;
+  width: 27px;
+}
+
+.component-list {
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  margin-top: 11px;
+}
+
+.component-row {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 10px 0;
+}
+
+.component-row + .component-row {
+  border-top: 1px solid var(--line);
+}
+
+.component-row > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.component-row strong {
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.component-row small {
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 7px;
+}
+
+.component-ecosystem {
+  color: var(--cobalt);
+  font-size: 7px;
+  font-weight: 740;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pin-status {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-size: 7px;
+  font-weight: 700;
+  padding: 4px 7px;
+}
+
+.pin-status.pinned {
+  background: var(--green-soft);
+  border-color: #bbddcd;
+  color: var(--green);
+}
+
+.pin-status.unpinned,
+.pin-status.mutable {
+  background: var(--amber-soft);
+  border-color: #ead6a4;
+  color: #93671e;
+}
+
 .probe-card {
   background: var(--paper-soft);
   border: 1px solid var(--line);

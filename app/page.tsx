@@ -13,6 +13,10 @@ import {
   type ServerStatus,
   type Severity,
 } from "../lib/audit-engine";
+import {
+  createCycloneDxReport,
+  type ComponentPinStatus,
+} from "../lib/supply-chain";
 
 type View = "overview" | "servers" | "rules" | "history";
 
@@ -37,6 +41,14 @@ const probeStatusLabel: Record<ProbeStatus, string> = {
   timeout: "Délai dépassé",
   unreachable: "Injoignable",
   "protocol-error": "Erreur de protocole",
+};
+
+const pinStatusLabel: Record<ComponentPinStatus, string> = {
+  pinned: "Immuable",
+  unpinned: "Non verrouillé",
+  mutable: "Tag mutable",
+  unknown: "Version inconnue",
+  "not-applicable": "Non applicable",
 };
 
 const makeFinding = (
@@ -472,24 +484,31 @@ export default function Home() {
     window.setTimeout(() => setToast(""), 2200);
   };
 
-  const exportReport = (format: "json" | "sarif") => {
+  const exportReport = (format: "json" | "sarif" | "cyclonedx") => {
     const generatedAt = new Date();
     const report =
       format === "sarif"
         ? createSarifReport(servers, generatedAt)
-        : createAuditReport(servers, generatedAt);
+        : format === "cyclonedx"
+          ? createCycloneDxReport(servers, generatedAt)
+          : createAuditReport(servers, generatedAt);
     const content = JSON.stringify(report, null, 2);
     const blob = new Blob([content], {
       type:
         format === "sarif"
           ? "application/sarif+json"
-          : "application/json",
+          : format === "cyclonedx"
+            ? "application/vnd.cyclonedx+json"
+            : "application/json",
     });
     const downloadUrl = URL.createObjectURL(blob);
     const link = document.createElement("a");
     const date = generatedAt.toISOString().slice(0, 10);
     link.href = downloadUrl;
-    link.download = `mcp-sentinel-${date}.${format}`;
+    link.download =
+      format === "cyclonedx"
+        ? `mcp-sentinel-${date}.cdx.json`
+        : `mcp-sentinel-${date}.${format}`;
     link.click();
     URL.revokeObjectURL(downloadUrl);
     document
@@ -498,7 +517,9 @@ export default function Home() {
     setToast(
       format === "sarif"
         ? "Rapport SARIF exporté"
-        : "Rapport JSON exporté",
+        : format === "cyclonedx"
+          ? "SBOM CycloneDX exporté"
+          : "Rapport JSON exporté",
     );
     window.setTimeout(() => setToast(""), 2200);
   };
@@ -596,6 +617,13 @@ export default function Home() {
                   <span>
                     <strong>Rapport SARIF</strong>
                     <small>Compatible avec les outils de sécurité</small>
+                  </span>
+                </button>
+                <button onClick={() => exportReport("cyclonedx")}>
+                  <span aria-hidden="true">⬡</span>
+                  <span>
+                    <strong>SBOM CycloneDX</strong>
+                    <small>Composants npm, PyPI et images OCI</small>
                   </span>
                 </button>
               </div>
@@ -1087,6 +1115,47 @@ export default function Home() {
                 <span style={{ width: `${selectedServer.score}%` }} />
               </div>
             </div>
+
+            {selectedServer.components?.length ? (
+              <section
+                className="supply-chain-card"
+                aria-label="Composants logiciels"
+              >
+                <div className="supply-chain-heading">
+                  <div>
+                    <span className="section-kicker">SUPPLY CHAIN</span>
+                    <strong>
+                      {selectedServer.components.length} composant
+                      {selectedServer.components.length > 1 ? "s" : ""}
+                    </strong>
+                  </div>
+                  <span aria-hidden="true">⬡</span>
+                </div>
+                <div className="component-list">
+                  {selectedServer.components.map((component) => (
+                    <article
+                      className="component-row"
+                      key={`${component.id}-${component.reference}`}
+                    >
+                      <div>
+                        <span className="component-ecosystem">
+                          {component.ecosystem}
+                        </span>
+                        <strong>{component.name}</strong>
+                        <small>
+                          {component.version ?? "Version non déclarée"}
+                        </small>
+                      </div>
+                      <span
+                        className={`pin-status ${component.pinStatus}`}
+                      >
+                        {pinStatusLabel[component.pinStatus]}
+                      </span>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ) : null}
 
             {selectedServer.probe && (
               <section

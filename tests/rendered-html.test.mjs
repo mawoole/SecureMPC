@@ -38,16 +38,18 @@ test("server-renders the MCP Sentinel application", async () => {
   assert.match(html, /Vue d’ensemble/);
   assert.match(html, /Lancer un audit/);
   assert.match(html, /Exporter/);
+  assert.match(html, /SBOM CycloneDX/);
   assert.doesNotMatch(html, developmentPreviewMeta);
   assert.doesNotMatch(html, /react-loading-skeleton/i);
   assert.doesNotMatch(html, /Your site is taking shape/i);
 });
 
 test("keeps the audit engine separate from the interface", async () => {
-  const [page, layout, auditEngine, packageJson] = await Promise.all([
+  const [page, layout, auditEngine, supplyChain, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/audit-engine.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/supply-chain.ts", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
@@ -56,6 +58,7 @@ test("keeps the audit engine separate from the interface", async () => {
   assert.match(page, /createSarifReport/);
   assert.match(auditEngine, /export function auditConfiguration/);
   assert.match(auditEngine, /export function createSarifReport/);
+  assert.match(supplyChain, /export function createCycloneDxReport/);
   assert.match(layout, /MCP Sentinel — Audit de sécurité MCP/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   let previewFiles = [];

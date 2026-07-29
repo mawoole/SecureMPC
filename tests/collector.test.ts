@@ -10,6 +10,7 @@ import {
   probeConfiguration,
   sanitizeConfiguration,
 } from "../lib/collector.ts";
+import { createCycloneDxReport } from "../lib/supply-chain.ts";
 
 test("discovers the common MCP configuration paths on every platform", () => {
   const windows = discoverCandidateFiles({
@@ -106,9 +107,25 @@ test("collects supported containers without retaining source secrets", async () 
     assert.equal(inventory.servers.length, 1);
     assert.equal(inventory.sources[0].status, "read");
     assert.equal(inventory.servers[0].probe.status, "not-requested");
+    assert.equal(inventory.servers[0].components.length, 1);
+    assert.equal(inventory.servers[0].components[0].ecosystem, "npm");
+    assert.equal(inventory.servers[0].components[0].pinStatus, "pinned");
     assert.match(inventory.servers[0].source.path, /^~\//);
     assert.doesNotMatch(serialized, new RegExp(secret));
     assert.match(serialized, /\$\{REDACTED\}/);
+
+    const sbom = createCycloneDxReport(
+      inventory.servers.map((server) => ({
+        id: server.id,
+        name: server.name,
+        transport: "Stdio",
+        source: server.source.client,
+        components: server.components,
+      })),
+      new Date(inventory.generatedAt),
+      "00000000-0000-4000-8000-000000000002",
+    );
+    assert.doesNotMatch(JSON.stringify(sbom), new RegExp(secret));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -3,11 +3,13 @@
 import { chmod, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { collectInventory } from "../lib/collector.ts";
+import { createCycloneDxReport } from "../lib/supply-chain.ts";
 
 type CliOptions = {
   additionalPaths: string[];
   output: string;
   probe: boolean;
+  sbomOutput?: string;
   stdout: boolean;
   timeoutMs: number;
   workspace?: string;
@@ -19,12 +21,14 @@ function help(): string {
 Usage:
   npm run collect
   npm run collect -- --probe
+  npm run collect -- --sbom
   npm run collect -- --path ./mcp.json --output ./mcp-inventory.json
 
 Options:
   --path <fichier>       Ajoute un fichier de configuration explicite (répétable)
   --workspace <dossier>  Dossier où rechercher .vscode/mcp.json et .cursor/mcp.json
   --probe                Vérifie passivement les endpoints HTTPS distants
+  --sbom [fichier]       Produit aussi un SBOM CycloneDX 1.7
   --timeout <ms>         Délai du probe, entre 500 et 15000 ms (défaut : 5000)
   --output <fichier>     Fichier produit (défaut : mcp-inventory.json)
   --stdout               Écrit l’inventaire sur la sortie standard
@@ -65,6 +69,16 @@ function parseArguments(args: string[]): CliOptions {
     }
     if (argument === "--stdout") {
       options.stdout = true;
+      continue;
+    }
+    if (argument === "--sbom") {
+      const candidate = args[index + 1];
+      if (candidate && !candidate.startsWith("--")) {
+        options.sbomOutput = resolve(candidate);
+        index += 1;
+      } else {
+        options.sbomOutput = resolve("mcp-sbom.cdx.json");
+      }
       continue;
     }
     if (argument === "--path") {
@@ -119,6 +133,40 @@ async function main() {
     }
   }
 
+  if (options.sbomOutput) {
+    const sbom = createCycloneDxReport(
+      inventory.servers.map((server) => {
+        const url =
+          typeof server.configuration.url === "string"
+            ? server.configuration.url
+            : "";
+        return {
+          id: server.id,
+          name: server.name,
+          transport: url
+            ? url.startsWith("https://")
+              ? "HTTPS"
+              : "HTTP"
+            : "Stdio",
+          source: `${server.source.client} · ${server.source.path}`,
+          components: server.components,
+        };
+      }),
+      new Date(inventory.generatedAt),
+    );
+    await writeFile(
+      options.sbomOutput,
+      `${JSON.stringify(sbom, null, 2)}\n`,
+      {
+        encoding: "utf8",
+        mode: 0o600,
+      },
+    );
+    if (process.platform !== "win32") {
+      await chmod(options.sbomOutput, 0o600);
+    }
+  }
+
   const discovered = inventory.servers.length;
   const redactions = inventory.servers.reduce(
     (total, server) => total + server.redactions.length,
@@ -135,6 +183,7 @@ async function main() {
         ? `${reachable} endpoint${reachable > 1 ? "s" : ""} MCP négocié${reachable > 1 ? "s" : ""}.`
         : "Probe réseau non demandé.",
       options.stdout ? "" : `Inventaire : ${options.output}`,
+      options.sbomOutput ? `SBOM : ${options.sbomOutput}` : "",
     ]
       .filter(Boolean)
       .join(" "),

@@ -22,6 +22,8 @@ directement applicables.
 - masquage des secrets avant la création de l’inventaire ;
 - vérification MCP passive et optionnelle des endpoints HTTPS ;
 - affichage de la version négociée et des capacités annoncées ;
+- inventaire des composants npm, PyPI, OCI et exécutables locaux ;
+- détection des tags d’images mutables et dépendances non verrouillées ;
 - prise en charge des objets `mcpServers` utilisés par Claude Desktop, Cursor
   et VS Code ;
 - détection locale des secrets présents en clair ;
@@ -33,7 +35,7 @@ directement applicables.
 - score de sécurité global et par serveur ;
 - priorisation par criticité ;
 - remédiations expliquées avec extraits de configuration copiables ;
-- export d’un rapport JSON ou SARIF exploitable par les outils de sécurité ;
+- export de rapports JSON, SARIF et d’un SBOM CycloneDX 1.7 ;
 - vues dédiées aux serveurs, règles et audits ;
 - interface responsive et accessible au clavier.
 
@@ -152,7 +154,35 @@ npm run collect -- --probe --timeout 10000
 
 # Choisir le fichier de sortie
 npm run collect -- --output ./mcp-inventory-equipe.json
+
+# Produire également un SBOM CycloneDX
+npm run collect -- --sbom
 ```
+
+### Inventaire supply chain et SBOM
+
+MCP Sentinel reconnaît les lanceurs suivants sans les exécuter :
+
+- npm : `npx`, `npm exec`, `pnpm dlx`, `yarn dlx` et `bunx` ;
+- Python : `uvx` et `pipx run` ;
+- conteneurs : `docker run`, `podman run` et `nerdctl run` ;
+- exécutables locaux, enregistrés sans chemin personnel ni version inventée.
+
+Une version npm exacte ou une contrainte PyPI `==` est considérée comme
+verrouillée. Pour une image OCI, seul un digest SHA-256 complet est immuable :
+un tag comme `1.4.0` reste modifiable dans le registre.
+
+La commande suivante produit `mcp-inventory.json` et
+`mcp-sbom.cdx.json` :
+
+```bash
+npm run collect:sbom
+```
+
+Le même SBOM peut être téléchargé depuis le menu **Exporter** de l’application.
+Il utilise CycloneDX 1.7, des identifiants
+[Package URL](https://github.com/package-url/purl-spec) et un graphe reliant
+chaque serveur MCP à ses composants détectés.
 
 ### Emplacements reconnus
 
@@ -180,7 +210,7 @@ et accepte les réponses JSON comme Server-Sent Events définies par le
 | Secrets | Jetons, mots de passe et clés présents en clair | Injection par variable d’environnement ou coffre de secrets |
 | Transport | URL HTTP et absence d’authentification visible | HTTPS et jeton court lié à l’audience |
 | Exécution | Shells intermédiaires et options désactivant la sécurité | Appel direct du binaire et sandbox active |
-| Supply chain | Paquets `latest` ou non versionnés | Version exacte revue et verrouillée |
+| Supply chain | Paquets npm/PyPI non verrouillés et images OCI sans digest | Version exacte ou digest SHA-256 revu |
 | Autorisations | Racines de disque, comptes administrateurs et portées larges | Chemin dédié, rôle en lecture seule et scopes minimaux |
 | Audit | Identité et corrélation insuffisantes | Identifiant de session et journalisation de métadonnées |
 
@@ -206,11 +236,13 @@ app/
 lib/
   audit-engine.ts  Règles, scoring et exports JSON/SARIF
   collector.ts     Découverte, redaction et probe MCP passif
+  supply-chain.ts  Détection des composants et export CycloneDX
 tools/
   collector.ts     Interface en ligne de commande multiplateforme
 tests/
   audit-engine.test.ts     Tests de sécurité du moteur
   collector.test.ts        Tests du collecteur et du protocole passif
+  supply-chain.test.ts     Tests npm, PyPI, OCI, PURL et CycloneDX
   rendered-html.test.mjs   Tests du rendu de production
 public/
   og.png         Carte d’aperçu du projet
@@ -224,6 +256,7 @@ public/
 | `npm run build` | Produit et valide la version de production |
 | `npm run start` | Lance la version construite |
 | `npm run collect` | Produit un inventaire local assaini |
+| `npm run collect:sbom` | Produit l’inventaire et le SBOM CycloneDX |
 | `npm run collect -- --probe` | Ajoute une négociation passive des endpoints HTTPS |
 | `npm run lint` | Vérifie les règles de qualité du code |
 | `npm run test:unit` | Teste le moteur, le collecteur et la non-divulgation des secrets |
@@ -244,6 +277,9 @@ l’application et vérifie le HTML produit.
   donc pas leur comportement à l’exécution ;
 - le probe distant valide la négociation, pas les permissions effectives de
   chaque outil ;
+- le SBOM décrit les composants directement visibles dans les commandes ; il
+  ne résout pas encore leurs dépendances transitives et n’interroge aucun
+  registre de vulnérabilités ;
 - elle ne confirme pas les permissions effectives côté GitHub, base de données,
   OAuth ou système de fichiers ;
 - l’historique affiché est illustratif et n’est pas encore persistant ;
@@ -251,7 +287,7 @@ l’application et vérifie le HTML produit.
 
 ## Prochaines étapes possibles
 
-- analyse de manifeste et SBOM des paquets exécutés ;
+- enrichissement du SBOM avec les dépendances transitives et les avis OSV ;
 - gestion d’exceptions documentées et datées ;
 - export d’un rapport PDF ;
 - historique persistant et suivi des écarts dans le temps ;

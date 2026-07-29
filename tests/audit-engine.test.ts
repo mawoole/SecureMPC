@@ -141,6 +141,31 @@ test("detects unpinned packages but accepts exact semantic versions", () => {
   assert.ok(
     servers[1].findings.every((finding) => finding.rule !== "MCP-SUP-02"),
   );
+  assert.equal(servers[0].components?.[0].ecosystem, "npm");
+  assert.equal(servers[1].components?.[0].pinStatus, "pinned");
+});
+
+test("flags mutable OCI images and unpinned Python packages", () => {
+  const servers = auditConfiguration(
+    config({
+      container: {
+        command: "docker",
+        args: ["run", "--rm", "ghcr.io/acme/mcp-server:1.4.0"],
+      },
+      python: {
+        command: "uvx",
+        args: ["mcp-server-fetch"],
+      },
+    }),
+  );
+
+  assert.equal(servers[0].components?.[0].pinStatus, "mutable");
+  assert.equal(servers[1].components?.[0].pinStatus, "unpinned");
+  assert.ok(
+    servers.every((server) =>
+      server.findings.some((finding) => finding.rule === "MCP-SUP-02"),
+    ),
+  );
 });
 
 test("flags privileged database identities without exposing connection data", () => {
