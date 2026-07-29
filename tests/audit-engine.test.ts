@@ -215,3 +215,58 @@ test("rejects malformed JSON and invalid server entries", () => {
     /serveur « broken » est invalide/,
   );
 });
+
+test("imports a redacted collector inventory with passive probe evidence", () => {
+  const servers = auditConfiguration(
+    JSON.stringify({
+      schemaVersion: "1.0",
+      generatedAt: "2026-07-29T12:00:00.000Z",
+      collector: {
+        name: "MCP Sentinel Collector",
+        version: "1.0.0",
+        platform: "linux",
+      },
+      sources: [],
+      servers: [
+        {
+          id: "abc123",
+          name: "remote",
+          source: {
+            client: "VS Code",
+            path: "~/.config/Code/User/mcp.json",
+          },
+          configuration: {
+            url: "https://mcp.example.test/v1",
+            headers: { Authorization: "${REDACTED}" },
+          },
+          redactions: [
+            {
+              path: "configuration.headers.Authorization",
+              kind: "secret",
+            },
+          ],
+          probe: {
+            status: "auth-required",
+            checkedAt: "2026-07-29T12:00:00.000Z",
+            durationMs: 24,
+            httpStatus: 401,
+            message: "Authentification requise.",
+          },
+        },
+      ],
+    }),
+  );
+
+  assert.equal(servers.length, 1);
+  assert.equal(servers[0].id, "collected-abc123");
+  assert.equal(servers[0].probe?.status, "auth-required");
+  assert.match(servers[0].source, /VS Code/);
+  assert.ok(
+    servers[0].findings.some((finding) => finding.rule === "MCP-SEC-01"),
+  );
+  assert.ok(
+    servers[0].findings.every(
+      (finding) => finding.rule !== "MCP-AUTHN-01",
+    ),
+  );
+});

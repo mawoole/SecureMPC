@@ -42,3 +42,6 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# local MCP collector output (may contain infrastructure metadata)
+/mcp-inventory*.json

@@ -9,6 +9,7 @@ import {
   SECURITY_RULES,
   type Finding,
   type McpServer,
+  type ProbeStatus,
   type ServerStatus,
   type Severity,
 } from "../lib/audit-engine";
@@ -25,6 +26,17 @@ const statusLabel: Record<ServerStatus, string> = {
   critical: "Critique",
   attention: "À corriger",
   secure: "Conforme",
+};
+
+const probeStatusLabel: Record<ProbeStatus, string> = {
+  "not-requested": "Non vérifié",
+  reachable: "Négociation réussie",
+  "auth-required": "Authentification exigée",
+  "skipped-insecure": "Ignoré — HTTP non chiffré",
+  "skipped-stdio": "Ignoré — exécution locale",
+  timeout: "Délai dépassé",
+  unreachable: "Injoignable",
+  "protocol-error": "Erreur de protocole",
 };
 
 const makeFinding = (
@@ -318,6 +330,7 @@ export default function Home() {
   const [selectedServer, setSelectedServer] = useState<McpServer | null>(null);
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [discoveryOpen, setDiscoveryOpen] = useState(false);
   const [configText, setConfigText] = useState(sampleConfig);
   const [importError, setImportError] = useState("");
   const [scanning, setScanning] = useState(false);
@@ -369,22 +382,30 @@ export default function Home() {
     }, 950);
   };
 
+  const applyAuditedServers = (audited: McpServer[], source: string) => {
+    if (!audited.length) {
+      throw new Error("La configuration ne contient aucun serveur.");
+    }
+    setServers(audited);
+    setImportOpen(false);
+    setDiscoveryOpen(false);
+    setFilter("all");
+    setSearch("");
+    setLastAudit("à l’instant");
+    setToast(
+      `${audited.length} serveur${audited.length > 1 ? "s" : ""} ${source} et analysé${audited.length > 1 ? "s" : ""} localement`,
+    );
+    window.setTimeout(() => setToast(""), 3500);
+  };
+
   const importConfiguration = () => {
     setImportError("");
     try {
       const audited = auditConfiguration(configText);
-      if (!audited.length) {
-        throw new Error("La configuration ne contient aucun serveur.");
-      }
-      setServers(audited);
-      setImportOpen(false);
-      setFilter("all");
-      setSearch("");
-      setLastAudit("à l’instant");
-      setToast(
-        `${audited.length} serveur${audited.length > 1 ? "s" : ""} importé${audited.length > 1 ? "s" : ""} et analysé${audited.length > 1 ? "s" : ""} localement`,
+      applyAuditedServers(
+        audited,
+        `importé${audited.length > 1 ? "s" : ""}`,
       );
-      window.setTimeout(() => setToast(""), 3500);
     } catch (error) {
       setImportError(
         error instanceof Error
@@ -409,6 +430,40 @@ export default function Home() {
     reader.onerror = () =>
       setImportError("Le fichier n’a pas pu être lu localement.");
     reader.readAsText(file);
+  };
+
+  const handleInventoryFile = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImportError("");
+    if (file.size > 5_000_000) {
+      setImportError("L’inventaire dépasse la limite de 5 Mo.");
+      return;
+    }
+
+    try {
+      const audited = auditConfiguration(await file.text());
+      applyAuditedServers(
+        audited,
+        `découvert${audited.length > 1 ? "s" : ""}`,
+      );
+    } catch (error) {
+      setImportError(
+        error instanceof Error
+          ? error.message
+          : "Cet inventaire JSON n’est pas valide.",
+      );
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const copyCollectorCommand = async () => {
+    await navigator.clipboard.writeText("npm run collect -- --probe");
+    setToast("Commande du collecteur copiée");
+    window.setTimeout(() => setToast(""), 2200);
   };
 
   const copySnippet = async (finding: Finding) => {
@@ -547,7 +602,20 @@ export default function Home() {
             </details>
             <button
               className="button secondary"
-              onClick={() => setImportOpen(true)}
+              onClick={() => {
+                setImportError("");
+                setDiscoveryOpen(true);
+              }}
+            >
+              <span aria-hidden="true">◎</span>
+              Découvrir
+            </button>
+            <button
+              className="button secondary"
+              onClick={() => {
+                setImportError("");
+                setImportOpen(true);
+              }}
             >
               <span aria-hidden="true">＋</span>
               Importer
@@ -896,6 +964,77 @@ export default function Home() {
         </div>
       )}
 
+      {discoveryOpen && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setDiscoveryOpen(false);
+          }}
+        >
+          <section
+            className="import-modal discovery-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="discovery-title"
+          >
+            <button
+              className="close-button"
+              aria-label="Fermer"
+              onClick={() => setDiscoveryOpen(false)}
+            >
+              ×
+            </button>
+            <span className="section-kicker">INVENTAIRE LOCAL</span>
+            <h2 id="discovery-title">Découvrir les serveurs MCP</h2>
+            <p className="modal-intro">
+              Le navigateur ne peut pas lire vos configurations système. Lancez
+              le collecteur depuis ce dépôt, puis importez l’inventaire produit.
+              Les secrets sont masqués avant l’écriture du fichier.
+            </p>
+
+            <div className="collector-command">
+              <div>
+                <span>WINDOWS · macOS · LINUX</span>
+                <code>npm run collect -- --probe</code>
+              </div>
+              <button onClick={copyCollectorCommand}>Copier</button>
+            </div>
+
+            <ul className="collector-guarantees">
+              <li>Aucun serveur stdio et aucun outil MCP n’est exécuté.</li>
+              <li>Aucun identifiant découvert n’est envoyé sur le réseau.</li>
+              <li>
+                Seuls les endpoints HTTPS reçoivent une négociation{" "}
+                <code>initialize</code>.
+              </li>
+            </ul>
+
+            <label className="file-drop">
+              <input
+                type="file"
+                accept=".json,application/json"
+                onChange={handleInventoryFile}
+              />
+              <span aria-hidden="true">↑</span>
+              <strong>Importer mcp-inventory.json</strong>
+              <small>5 Mo maximum · analyse immédiate dans ce navigateur</small>
+            </label>
+            {importError && (
+              <p className="form-error" id="discovery-error">
+                {importError}
+              </p>
+            )}
+
+            <p className="collector-help">
+              Sans vérification réseau : <code>npm run collect</code>. Ajoutez{" "}
+              <code>--path chemin/vers/mcp.json</code> pour un fichier
+              personnalisé.
+            </p>
+          </section>
+        </div>
+      )}
+
       {selectedServer && (
         <div
           className="drawer-backdrop"
@@ -948,6 +1087,45 @@ export default function Home() {
                 <span style={{ width: `${selectedServer.score}%` }} />
               </div>
             </div>
+
+            {selectedServer.probe && (
+              <section
+                className={`probe-card ${selectedServer.probe.status}`}
+                aria-label="Vérification MCP passive"
+              >
+                <div className="probe-card-heading">
+                  <div>
+                    <span className="section-kicker">PROBE PASSIF</span>
+                    <strong>
+                      {probeStatusLabel[selectedServer.probe.status]}
+                    </strong>
+                  </div>
+                  <span className="probe-duration">
+                    {selectedServer.probe.durationMs} ms
+                  </span>
+                </div>
+                <p>{selectedServer.probe.message}</p>
+                {(selectedServer.probe.protocolVersion ||
+                  selectedServer.probe.capabilities?.length) && (
+                  <dl>
+                    {selectedServer.probe.protocolVersion && (
+                      <>
+                        <dt>Version</dt>
+                        <dd>{selectedServer.probe.protocolVersion}</dd>
+                      </>
+                    )}
+                    {selectedServer.probe.capabilities?.length ? (
+                      <>
+                        <dt>Capacités</dt>
+                        <dd>
+                          {selectedServer.probe.capabilities.join(", ")}
+                        </dd>
+                      </>
+                    ) : null}
+                  </dl>
+                )}
+              </section>
+            )}
 
             <div className="drawer-section-head">
               <div>

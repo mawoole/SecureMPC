@@ -1,5 +1,26 @@
 export type Severity = "critical" | "high" | "medium";
 export type ServerStatus = "critical" | "attention" | "secure";
+export type ProbeStatus =
+  | "not-requested"
+  | "reachable"
+  | "auth-required"
+  | "skipped-insecure"
+  | "skipped-stdio"
+  | "timeout"
+  | "unreachable"
+  | "protocol-error";
+
+export type PassiveProbe = {
+  status: ProbeStatus;
+  checkedAt: string;
+  durationMs: number;
+  protocolVersion?: string;
+  capabilities?: string[];
+  serverName?: string;
+  serverVersion?: string;
+  httpStatus?: number;
+  message: string;
+};
 
 export type Finding = {
   id: string;
@@ -22,6 +43,7 @@ export type McpServer = {
   controls: number;
   findings: Finding[];
   lastScan: string;
+  probe?: PassiveProbe;
 };
 
 export type SecurityRule = {
@@ -123,6 +145,13 @@ export const SECURITY_RULES: SecurityRule[] = [
     detail:
       "Encourage l’exposition du seul périmètre de données utile au serveur.",
     category: "Données",
+  },
+  {
+    code: "MCP-PROTO-01",
+    title: "Négociation MCP",
+    detail:
+      "Vérifie passivement la disponibilité, la version et les capacités des endpoints HTTPS.",
+    category: "Protocole",
   },
 ];
 
@@ -337,7 +366,134 @@ export function auditConfiguration(raw: string): McpServer[] {
     throw new Error("Aucun objet de serveurs MCP n’a été trouvé.");
   }
 
-  const container = extractServerContainer(parsed as Record<string, unknown>);
+  const parsedRecord = parsed as Record<string, unknown>;
+  const collector =
+    parsedRecord.collector &&
+    typeof parsedRecord.collector === "object" &&
+    !Array.isArray(parsedRecord.collector)
+      ? (parsedRecord.collector as Record<string, unknown>)
+      : undefined;
+  const isCollectorInventory =
+    parsedRecord.schemaVersion === "1.0" &&
+    collector?.name === "MCP Sentinel Collector" &&
+    Array.isArray(parsedRecord.servers);
+
+  if (isCollectorInventory) {
+    return (parsedRecord.servers as unknown[]).map((entry, index) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        throw new Error(
+          `L’entrée ${index + 1} de l’inventaire collecteur est invalide.`,
+        );
+      }
+
+      const collected = entry as Record<string, unknown>;
+      const name =
+        typeof collected.name === "string" && collected.name.trim()
+          ? collected.name
+          : `Serveur ${index + 1}`;
+      const configuration =
+        collected.configuration &&
+        typeof collected.configuration === "object" &&
+        !Array.isArray(collected.configuration)
+          ? (collected.configuration as Record<string, unknown>)
+          : undefined;
+      if (!configuration) {
+        throw new Error(
+          `La configuration du serveur « ${name} » est invalide.`,
+        );
+      }
+
+      const base = auditConfiguration(
+        JSON.stringify({ mcpServers: { [name]: configuration } }),
+      )[0];
+      const redactions = Array.isArray(collected.redactions)
+        ? collected.redactions
+        : [];
+      let findings = [...base.findings];
+
+      if (
+        redactions.length > 0 &&
+        !findings.some((finding) => finding.rule === "MCP-SEC-01")
+      ) {
+        findings.push(
+          makeFinding(
+            `collected-${index}-${slugify(name)}-secret`,
+            "critical",
+            "Secret masqué par le collecteur",
+            `${redactions.length} valeur${redactions.length > 1 ? "s sensibles ont" : " sensible a"} été remplacée${redactions.length > 1 ? "s" : ""} avant la création de l’inventaire. Aucune valeur n’est conservée dans le rapport.`,
+            "Déplacez la valeur dans un coffre de secrets ou une variable d’environnement. Révoquez-la si le fichier source a été partagé ou committé.",
+            `"env": {\n  "SERVICE_TOKEN": "\${SERVICE_TOKEN}"\n}`,
+            "MCP-SEC-01",
+          ),
+        );
+      }
+
+      const probe =
+        collected.probe &&
+        typeof collected.probe === "object" &&
+        !Array.isArray(collected.probe)
+          ? (collected.probe as PassiveProbe)
+          : undefined;
+
+      if (probe?.status === "auth-required") {
+        findings = findings.filter(
+          (finding) => finding.rule !== "MCP-AUTHN-01",
+        );
+      }
+
+      if (
+        probe &&
+        ["timeout", "unreachable", "protocol-error"].includes(probe.status)
+      ) {
+        const timeout = probe.status === "timeout";
+        findings.push(
+          makeFinding(
+            `collected-${index}-${slugify(name)}-probe`,
+            timeout ? "medium" : "high",
+            timeout
+              ? "Vérification MCP expirée"
+              : probe.status === "unreachable"
+                ? "Endpoint MCP injoignable"
+                : "Négociation MCP invalide",
+            probe.message,
+            timeout
+              ? "Confirmez la disponibilité réseau, puis relancez avec un délai adapté, par exemple npm run collect -- --probe --timeout 10000."
+              : "Vérifiez l’URL, le certificat TLS et la compatibilité avec la version MCP annoncée, puis relancez le collecteur.",
+            `npm run collect -- --probe --timeout 10000`,
+            "MCP-PROTO-01",
+          ),
+        );
+      }
+
+      const source =
+        collected.source &&
+        typeof collected.source === "object" &&
+        !Array.isArray(collected.source)
+          ? (collected.source as Record<string, unknown>)
+          : undefined;
+      const sourceClient =
+        typeof source?.client === "string" ? source.client : "Collecteur local";
+      const sourcePath =
+        typeof source?.path === "string" ? ` · ${source.path}` : "";
+
+      return {
+        ...base,
+        id:
+          typeof collected.id === "string"
+            ? `collected-${collected.id}`
+            : `collected-${index}-${slugify(name)}`,
+        source: `${sourceClient}${sourcePath}`,
+        findings,
+        status: serverStatus(findings),
+        score: serverScore(findings),
+        controls: SECURITY_RULES.length,
+        lastScan: "collecté à l’instant",
+        probe,
+      };
+    });
+  }
+
+  const container = extractServerContainer(parsedRecord);
 
   return Object.entries(container).map(([name, value], index) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
