@@ -24,6 +24,7 @@ directement applicables.
 - affichage de la version négociée et des capacités annoncées ;
 - inventaire des composants npm, PyPI, OCI et exécutables locaux ;
 - détection des tags d’images mutables et dépendances non verrouillées ;
+- recherche optionnelle des vulnérabilités connues via OSV.dev ;
 - prise en charge des objets `mcpServers` utilisés par Claude Desktop, Cursor
   et VS Code ;
 - détection locale des secrets présents en clair ;
@@ -53,6 +54,9 @@ par un collecteur local explicite :
 - le probe n’envoie jamais les en-têtes d’authentification trouvés dans les
   configurations ;
 - le probe ne contacte que les endpoints HTTPS et n’appelle aucun outil MCP ;
+- l’analyse OSV est désactivée par défaut ; avec `--osv`, seuls les PURL des
+  composants ayant une version exacte sont envoyés à `api.osv.dev` ;
+- aucun chemin, configuration, en-tête ou secret n’est envoyé à OSV ;
 - les données de démonstration peuvent être restaurées à tout moment.
 
 Même avec ces protections, évitez de partager ou de committer une configuration
@@ -184,6 +188,29 @@ Il utilise CycloneDX 1.7, des identifiants
 [Package URL](https://github.com/package-url/purl-spec) et un graphe reliant
 chaque serveur MCP à ses composants détectés.
 
+### Vulnérabilités connues avec OSV
+
+L’analyse OSV est explicite et ne concerne que les composants directs dont la
+version est exacte. La commande complète réalise le probe passif, interroge OSV
+et produit également le SBOM :
+
+```bash
+npm run collect:security
+```
+
+Le collecteur envoie uniquement des PURL versionnés à l’API publique
+[OSV.dev](https://google.github.io/osv.dev/post-v1-querybatch/). Il récupère
+ensuite les avis correspondants, leurs niveaux de sévérité et, lorsqu’elle est
+publiée, la première version corrigée. Les résultats alimentent :
+
+- le score et les remédiations de chaque serveur ;
+- le rapport JSON et l’export SARIF ;
+- la section `vulnerabilities` du SBOM CycloneDX.
+
+Une panne OSV ne produit aucun faux résultat négatif : l’inventaire est écrit
+avec le statut `error`, le message précise que l’analyse est incomplète et la
+commande se termine avec le code `2`.
+
 ### Emplacements reconnus
 
 | Client | Windows | macOS | Linux |
@@ -210,7 +237,7 @@ et accepte les réponses JSON comme Server-Sent Events définies par le
 | Secrets | Jetons, mots de passe et clés présents en clair | Injection par variable d’environnement ou coffre de secrets |
 | Transport | URL HTTP et absence d’authentification visible | HTTPS et jeton court lié à l’audience |
 | Exécution | Shells intermédiaires et options désactivant la sécurité | Appel direct du binaire et sandbox active |
-| Supply chain | Paquets npm/PyPI non verrouillés et images OCI sans digest | Version exacte ou digest SHA-256 revu |
+| Supply chain | Paquets non verrouillés, images OCI mutables et avis OSV connus | Version exacte, digest SHA-256 ou version corrigée indiquée |
 | Autorisations | Racines de disque, comptes administrateurs et portées larges | Chemin dédié, rôle en lecture seule et scopes minimaux |
 | Audit | Identité et corrélation insuffisantes | Identifiant de session et journalisation de métadonnées |
 
@@ -224,7 +251,7 @@ exploitable.
 - **TypeScript** pour le moteur d’analyse et les composants ;
 - **vinext / Vite** pour la construction ;
 - aucune base de données pour la première version ;
-- aucune API distante requise pour auditer une configuration.
+- aucune API distante requise pour l’analyse statique ; OSV reste optionnel.
 
 Principaux fichiers :
 
@@ -236,12 +263,14 @@ app/
 lib/
   audit-engine.ts  Règles, scoring et exports JSON/SARIF
   collector.ts     Découverte, redaction et probe MCP passif
+  osv.ts           Client OSV limité aux PURL versionnés
   supply-chain.ts  Détection des composants et export CycloneDX
 tools/
   collector.ts     Interface en ligne de commande multiplateforme
 tests/
   audit-engine.test.ts     Tests de sécurité du moteur
   collector.test.ts        Tests du collecteur et du protocole passif
+  osv.test.ts              Tests du client OSV et de ses limites réseau
   supply-chain.test.ts     Tests npm, PyPI, OCI, PURL et CycloneDX
   rendered-html.test.mjs   Tests du rendu de production
 public/
@@ -257,7 +286,9 @@ public/
 | `npm run start` | Lance la version construite |
 | `npm run collect` | Produit un inventaire local assaini |
 | `npm run collect:sbom` | Produit l’inventaire et le SBOM CycloneDX |
+| `npm run collect:security` | Ajoute le probe, l’analyse OSV et le SBOM |
 | `npm run collect -- --probe` | Ajoute une négociation passive des endpoints HTTPS |
+| `npm run collect -- --osv` | Interroge OSV avec les seuls PURL versionnés |
 | `npm run lint` | Vérifie les règles de qualité du code |
 | `npm run test:unit` | Teste le moteur, le collecteur et la non-divulgation des secrets |
 | `npm run test:rendered` | Vérifie le HTML produit par l’application |
@@ -277,9 +308,11 @@ l’application et vérifie le HTML produit.
   donc pas leur comportement à l’exécution ;
 - le probe distant valide la négociation, pas les permissions effectives de
   chaque outil ;
-- le SBOM décrit les composants directement visibles dans les commandes ; il
-  ne résout pas encore leurs dépendances transitives et n’interroge aucun
-  registre de vulnérabilités ;
+- le SBOM et l’analyse OSV décrivent uniquement les composants directement
+  visibles dans les commandes ; les dépendances transitives ne sont pas encore
+  résolues ;
+- OSV peut ne pas disposer d’un avis ou d’une sévérité normalisée pour tous les
+  écosystèmes ; le statut de l’analyse doit donc être vérifié dans l’inventaire ;
 - elle ne confirme pas les permissions effectives côté GitHub, base de données,
   OAuth ou système de fichiers ;
 - l’historique affiché est illustratif et n’est pas encore persistant ;
@@ -287,7 +320,7 @@ l’application et vérifie le HTML produit.
 
 ## Prochaines étapes possibles
 
-- enrichissement du SBOM avec les dépendances transitives et les avis OSV ;
+- enrichissement du SBOM avec les dépendances transitives issues des lockfiles ;
 - gestion d’exceptions documentées et datées ;
 - export d’un rapport PDF ;
 - historique persistant et suivi des écarts dans le temps ;

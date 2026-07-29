@@ -6,6 +6,23 @@ export type ComponentPinStatus =
   | "unknown"
   | "not-applicable";
 
+export type VulnerabilitySeverity =
+  | "critical"
+  | "high"
+  | "medium"
+  | "low"
+  | "unknown";
+
+export type ComponentVulnerability = {
+  id: string;
+  aliases: string[];
+  summary: string;
+  severity: VulnerabilitySeverity;
+  modified?: string;
+  advisoryUrl: string;
+  fixedVersion?: string;
+};
+
 export type SupplyChainComponent = {
   id: string;
   ecosystem: ComponentEcosystem;
@@ -16,6 +33,7 @@ export type SupplyChainComponent = {
   componentType: "library" | "container" | "application";
   pinStatus: ComponentPinStatus;
   evidence: string;
+  vulnerabilities?: ComponentVulnerability[];
 };
 
 export type SbomServer = {
@@ -362,6 +380,27 @@ export function createCycloneDxReport(
     }
   }
 
+  const vulnerabilityEntries = new Map<
+    string,
+    {
+      vulnerability: ComponentVulnerability;
+      affects: Set<string>;
+    }
+  >();
+  for (const server of servers) {
+    for (const component of server.components ?? []) {
+      const ref = componentBomRef(component);
+      for (const vulnerability of component.vulnerabilities ?? []) {
+        const existing = vulnerabilityEntries.get(vulnerability.id) ?? {
+          vulnerability,
+          affects: new Set<string>(),
+        };
+        existing.affects.add(ref);
+        vulnerabilityEntries.set(vulnerability.id, existing);
+      }
+    }
+  }
+
   const serverRefs = servers.map(
     (server) => `urn:mcp-server:${encodeURIComponent(server.id)}`,
   );
@@ -380,7 +419,7 @@ export function createCycloneDxReport(
           {
             type: "application",
             name: "MCP Sentinel",
-            version: "1.1.0",
+            version: "1.2.0",
           },
         ],
       },
@@ -450,5 +489,34 @@ export function createCycloneDxReport(
         dependsOn: [],
       })),
     ],
+    ...(vulnerabilityEntries.size
+      ? {
+          vulnerabilities: [...vulnerabilityEntries.values()].map(
+            ({ vulnerability, affects }) => ({
+              id: vulnerability.id,
+              source: {
+                name: "OSV",
+                url: `https://osv.dev/vulnerability/${encodeURIComponent(vulnerability.id)}`,
+              },
+              ratings: [
+                {
+                  source: { name: "OSV" },
+                  severity: vulnerability.severity,
+                },
+              ],
+              description: vulnerability.summary,
+              ...(vulnerability.modified
+                ? { updated: vulnerability.modified }
+                : {}),
+              ...(vulnerability.fixedVersion
+                ? {
+                    recommendation: `Mettre à jour vers ${vulnerability.fixedVersion} ou une version corrigée ultérieure.`,
+                  }
+                : {}),
+              affects: [...affects].map((ref) => ({ ref })),
+            }),
+          ),
+        }
+      : {}),
   };
 }

@@ -3,11 +3,13 @@
 import { chmod, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { collectInventory } from "../lib/collector.ts";
+import { scanComponentsWithOsv } from "../lib/osv.ts";
 import { createCycloneDxReport } from "../lib/supply-chain.ts";
 
 type CliOptions = {
   additionalPaths: string[];
   output: string;
+  osv: boolean;
   probe: boolean;
   sbomOutput?: string;
   stdout: boolean;
@@ -20,14 +22,17 @@ function help(): string {
 
 Usage:
   npm run collect
+  npm run collect:security
   npm run collect -- --probe
   npm run collect -- --sbom
+  npm run collect -- --osv --sbom
   npm run collect -- --path ./mcp.json --output ./mcp-inventory.json
 
 Options:
   --path <fichier>       Ajoute un fichier de configuration explicite (répétable)
   --workspace <dossier>  Dossier où rechercher .vscode/mcp.json et .cursor/mcp.json
   --probe                Vérifie passivement les endpoints HTTPS distants
+  --osv                  Interroge OSV.dev avec les PURL versionnés uniquement
   --sbom [fichier]       Produit aussi un SBOM CycloneDX 1.7
   --timeout <ms>         Délai du probe, entre 500 et 15000 ms (défaut : 5000)
   --output <fichier>     Fichier produit (défaut : mcp-inventory.json)
@@ -37,6 +42,7 @@ Options:
 Garanties du collecteur :
   - les secrets concrets sont remplacés avant l’écriture ;
   - aucun en-tête d’authentification découvert n’est envoyé ;
+  - avec --osv, seuls les PURL versionnés sont envoyés à OSV.dev ;
   - aucun serveur stdio ni outil MCP n’est exécuté.`;
 }
 
@@ -52,6 +58,7 @@ function parseArguments(args: string[]): CliOptions {
   const options: CliOptions = {
     additionalPaths: [],
     output: resolve("mcp-inventory.json"),
+    osv: false,
     probe: false,
     stdout: false,
     timeoutMs: 5_000,
@@ -65,6 +72,10 @@ function parseArguments(args: string[]): CliOptions {
     }
     if (argument === "--probe") {
       options.probe = true;
+      continue;
+    }
+    if (argument === "--osv") {
+      options.osv = true;
       continue;
     }
     if (argument === "--stdout") {
@@ -119,6 +130,23 @@ function parseArguments(args: string[]): CliOptions {
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   const inventory = await collectInventory(options);
+
+  if (options.osv) {
+    const componentCounts = inventory.servers.map(
+      (server) => server.components.length,
+    );
+    const scan = await scanComponentsWithOsv(
+      inventory.servers.flatMap((server) => server.components),
+    );
+    let cursor = 0;
+    inventory.servers.forEach((server, index) => {
+      const count = componentCounts[index];
+      server.components = scan.components.slice(cursor, cursor + count);
+      cursor += count;
+    });
+    inventory.vulnerabilityScan = scan.summary;
+  }
+
   const serialized = `${JSON.stringify(inventory, null, 2)}\n`;
 
   if (options.stdout) {
@@ -175,6 +203,7 @@ async function main() {
   const reachable = inventory.servers.filter(
     (server) => server.probe.status === "reachable",
   ).length;
+  const vulnerabilities = inventory.vulnerabilityScan?.vulnerabilities ?? 0;
   process.stderr.write(
     [
       `${discovered} serveur${discovered > 1 ? "s" : ""} découvert${discovered > 1 ? "s" : ""}.`,
@@ -182,6 +211,9 @@ async function main() {
       options.probe
         ? `${reachable} endpoint${reachable > 1 ? "s" : ""} MCP négocié${reachable > 1 ? "s" : ""}.`
         : "Probe réseau non demandé.",
+      options.osv
+        ? `${vulnerabilities} avis OSV trouvé${vulnerabilities > 1 ? "s" : ""}.`
+        : "Analyse OSV non demandée.",
       options.stdout ? "" : `Inventaire : ${options.output}`,
       options.sbomOutput ? `SBOM : ${options.sbomOutput}` : "",
     ]
@@ -189,6 +221,9 @@ async function main() {
       .join(" "),
   );
   process.stderr.write("\n");
+  if (inventory.vulnerabilityScan?.status === "error") {
+    process.exitCode = 2;
+  }
 }
 
 main().catch((error) => {
