@@ -131,6 +131,62 @@ test("collects supported containers without retaining source secrets", async () 
   }
 });
 
+test("attaches workspace lockfile dependencies to matching MCP servers", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mcp-sentinel-lock-"));
+  const configPath = join(directory, "mcp.json");
+  try {
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          github: {
+            command: "npx",
+            args: ["-y", "@acme/mcp-server@1.2.3"],
+          },
+        },
+      }),
+      "utf8",
+    );
+    await writeFile(
+      join(directory, "package-lock.json"),
+      JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          "node_modules/@acme/mcp-server": {
+            name: "@acme/mcp-server",
+            version: "1.2.3",
+            integrity: "sha512-direct",
+            dependencies: { helper: "2.0.0" },
+          },
+          "node_modules/helper": {
+            version: "2.0.0",
+            integrity: "sha512-helper",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const inventory = await collectInventory({
+      candidates: [{ client: "Test client", path: configPath }],
+      home: directory,
+      workspace: directory,
+      platform: "linux",
+      scanLockfiles: true,
+      now: () => new Date("2026-07-29T12:00:00.000Z"),
+    });
+
+    assert.equal(inventory.lockfiles?.length, 1);
+    assert.equal(inventory.lockfiles?.[0].matchedServers, 1);
+    assert.equal(inventory.servers[0].componentGraph?.direct, 1);
+    assert.equal(inventory.servers[0].componentGraph?.transitive, 1);
+    assert.equal(inventory.servers[0].components[1].name, "helper");
+    assert.doesNotMatch(JSON.stringify(inventory), new RegExp(directory));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("passive HTTPS probe negotiates capabilities without credentials or tools", async () => {
   const requests: Array<{ input: string; init?: RequestInit }> = [];
   const fetchImpl: typeof fetch = async (input, init) => {

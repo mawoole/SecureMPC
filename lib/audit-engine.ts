@@ -51,6 +51,12 @@ export type McpServer = {
   lastScan: string;
   probe?: PassiveProbe;
   components?: SupplyChainComponent[];
+  componentGraph?: {
+    direct: number;
+    transitive: number;
+    truncated: boolean;
+    lockfiles: string[];
+  };
   vulnerabilityScan?: VulnerabilityScanSummary;
 };
 
@@ -402,6 +408,23 @@ function sanitizeImportedComponent(
     : [];
   const version = importedText(record.version, 100);
   const purl = importedText(record.purl, 2_048);
+  const scope =
+    record.scope === "transitive" ? "transitive" : "direct";
+  const dependencies = Array.isArray(record.dependencies)
+    ? record.dependencies
+        .map((dependency) => importedText(dependency, 2_048))
+        .filter(
+          (dependency): dependency is string =>
+            Boolean(dependency?.startsWith("pkg:")),
+        )
+        .slice(0, 1_000)
+    : [];
+  const lockfile = importedText(record.lockfile, 500);
+  const integrityStatus =
+    record.integrityStatus === "recorded" ||
+    record.integrityStatus === "missing"
+      ? record.integrityStatus
+      : undefined;
 
   return {
     id,
@@ -414,6 +437,10 @@ function sanitizeImportedComponent(
       componentType as SupplyChainComponent["componentType"],
     pinStatus: pinStatus as SupplyChainComponent["pinStatus"],
     evidence,
+    scope,
+    dependencies,
+    ...(lockfile ? { lockfile } : {}),
+    ...(integrityStatus ? { integrityStatus } : {}),
     vulnerabilities,
   };
 }
@@ -559,6 +586,34 @@ export function auditConfiguration(raw: string): McpServer[] {
                 component !== undefined,
             )
         : base.components;
+      const componentGraph = components?.some(
+        (component) =>
+          component.scope === "transitive" || component.lockfile,
+      )
+        ? {
+            direct: components.filter(
+              (component) => component.scope !== "transitive",
+            ).length,
+            transitive: components.filter(
+              (component) => component.scope === "transitive",
+            ).length,
+            truncated:
+              Boolean(
+                collected.componentGraph &&
+                  typeof collected.componentGraph === "object" &&
+                  !Array.isArray(collected.componentGraph) &&
+                  (collected.componentGraph as Record<string, unknown>)
+                    .truncated,
+              ),
+            lockfiles: [
+              ...new Set(
+                components.flatMap((component) =>
+                  component.lockfile ? [component.lockfile] : [],
+                ),
+              ),
+            ],
+          }
+        : undefined;
 
       if (
         redactions.length > 0 &&
@@ -608,16 +663,29 @@ export function auditConfiguration(raw: string): McpServer[] {
             typeof vulnerability.fixedVersion === "string"
               ? vulnerability.fixedVersion.slice(0, 100)
               : undefined;
+          const parents = (components ?? [])
+            .filter((candidate) =>
+              (candidate.dependencies ?? []).includes(
+                component.purl ?? component.id,
+              ),
+            )
+            .map((candidate) => candidate.name)
+            .slice(0, 3);
+          const transitive = component.scope === "transitive";
 
           findings.push(
             makeFinding(
               `collected-${index}-${slugify(name)}-osv-${componentIndex}-${vulnerabilityIndex}`,
               severity,
               `Vulnérabilité connue ${vulnerabilityId}`,
-              `${summary} Composant concerné : ${component.name}${component.version ? ` ${component.version}` : ""}.`,
+              `${summary} ${transitive ? "Dépendance transitive" : "Composant direct"} concerné${transitive ? "e" : ""} : ${component.name}${component.version ? ` ${component.version}` : ""}${parents.length ? `, introduite par ${parents.join(", ")}` : ""}.`,
               fixedVersion
-                ? `Mettez à jour ${component.name} vers la version corrigée ${fixedVersion} ou une version ultérieure compatible, puis régénérez l’inventaire.`
-                : `Consultez l’avis, identifiez une version corrigée compatible et régénérez l’inventaire avant remise en service.`,
+                ? transitive
+                  ? `Mettez à jour ${parents.length ? parents.join(", ") : "la dépendance directe qui l’introduit"} afin de résoudre ${component.name} en version ${fixedVersion} ou ultérieure, régénérez le lockfile puis l’inventaire.`
+                  : `Mettez à jour ${component.name} vers la version corrigée ${fixedVersion} ou une version ultérieure compatible, puis régénérez l’inventaire.`
+                : transitive
+                  ? `Mettez à jour la dépendance directe qui introduit ${component.name}, régénérez le lockfile et vérifiez que l’avis disparaît avant remise en service.`
+                  : `Consultez l’avis, identifiez une version corrigée compatible et régénérez l’inventaire avant remise en service.`,
               advisoryUrl,
               "MCP-VULN-01",
             ),
@@ -687,6 +755,7 @@ export function auditConfiguration(raw: string): McpServer[] {
         lastScan: "collecté à l’instant",
         probe,
         components,
+        componentGraph,
         vulnerabilityScan,
       };
     });
@@ -891,6 +960,9 @@ function cloneForReport(server: McpServer): McpServer {
     findings: server.findings.map((finding) => ({ ...finding })),
     components: server.components?.map((component) => ({
       ...component,
+      dependencies: component.dependencies
+        ? [...component.dependencies]
+        : undefined,
       vulnerabilities: component.vulnerabilities?.map((vulnerability) => ({
         ...vulnerability,
         aliases: [...vulnerability.aliases],
@@ -898,6 +970,12 @@ function cloneForReport(server: McpServer): McpServer {
     })),
     vulnerabilityScan: server.vulnerabilityScan
       ? { ...server.vulnerabilityScan }
+      : undefined,
+    componentGraph: server.componentGraph
+      ? {
+          ...server.componentGraph,
+          lockfiles: [...server.componentGraph.lockfiles],
+        }
       : undefined,
   };
 }

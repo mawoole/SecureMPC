@@ -263,6 +263,8 @@ export async function scanComponentsWithOsv(
     0,
     MAX_COMPONENTS_PER_QUERY,
   );
+  const componentLimitReached =
+    eligibleByPurl.size > MAX_COMPONENTS_PER_QUERY;
   const eligibleComponents = [...eligibleByPurl.values()].reduce(
     (total, matches) => total + matches.length,
     0,
@@ -389,7 +391,7 @@ export async function scanComponentsWithOsv(
       }
     }
 
-    const partial = paginated || missingDetails;
+    const partial = paginated || missingDetails || componentLimitReached;
     return {
       components: components.map((component) => ({
         ...component,
@@ -405,7 +407,9 @@ export async function scanComponentsWithOsv(
         skippedComponents,
         vulnerabilities: uniqueVulnerabilities.size,
         message: partial
-          ? "Analyse OSV terminée avec des détails ou pages indisponibles."
+          ? componentLimitReached
+            ? `Analyse OSV limitée aux ${MAX_COMPONENTS_PER_QUERY} premiers PURL versionnés.`
+            : "Analyse OSV terminée avec des détails ou pages indisponibles."
           : "Analyse OSV terminée.",
       },
     };

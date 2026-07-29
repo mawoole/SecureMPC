@@ -207,3 +207,38 @@ test("reports an OSV outage without inventing vulnerability results", async () =
   assert.equal(result.components[0].vulnerabilities, undefined);
   assert.match(result.summary.message, /ne doit être considéré comme complet/);
 });
+
+test("marks scans as partial when more than 1000 PURLs are eligible", async () => {
+  let queries = 0;
+  const fetchImpl = (async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ) => {
+    assert.match(String(input), /querybatch$/);
+    const body = JSON.parse(String(init?.body)) as {
+      queries: unknown[];
+    };
+    queries = body.queries.length;
+    return Response.json({
+      results: Array.from({ length: queries }, () => ({ vulns: [] })),
+    });
+  }) as typeof fetch;
+  const components = Array.from({ length: 1_001 }, (_, index) => ({
+    ...pinnedComponent(),
+    id: `component-${index}`,
+    name: `package-${index}`,
+    version: "1.0.0",
+    purl: `pkg:npm/package-${index}@1.0.0`,
+    reference: `package-${index}@1.0.0`,
+  }));
+
+  const result = await scanComponentsWithOsv(components, {
+    fetchImpl,
+    now: () => checkedAt,
+  });
+
+  assert.equal(queries, 1_000);
+  assert.equal(result.summary.status, "partial");
+  assert.equal(result.summary.skippedComponents, 1);
+  assert.match(result.summary.message, /1000 premiers PURL/);
+});

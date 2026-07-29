@@ -1032,6 +1032,10 @@ export default function Home() {
             <ul className="collector-guarantees">
               <li>Aucun serveur stdio et aucun outil MCP n’est exécuté.</li>
               <li>
+                Les lockfiles npm, uv et Poetry sont lus sans lancer leur
+                gestionnaire de paquets.
+              </li>
+              <li>
                 OSV reçoit uniquement les PURL avec une version exacte, jamais
                 les configurations, chemins ou secrets.
               </li>
@@ -1128,8 +1132,9 @@ export default function Home() {
                   <div>
                     <span className="section-kicker">SUPPLY CHAIN</span>
                     <strong>
-                      {selectedServer.components.length} composant
-                      {selectedServer.components.length > 1 ? "s" : ""}
+                      {selectedServer.componentGraph
+                        ? `${selectedServer.componentGraph.direct} direct${selectedServer.componentGraph.direct > 1 ? "s" : ""} · ${selectedServer.componentGraph.transitive} transitif${selectedServer.componentGraph.transitive > 1 ? "s" : ""}`
+                        : `${selectedServer.components.length} composant${selectedServer.components.length > 1 ? "s" : ""}`}
                     </strong>
                   </div>
                   {selectedServer.vulnerabilityScan ? (
@@ -1149,18 +1154,30 @@ export default function Home() {
                   )}
                 </div>
                 <div className="component-list">
-                  {selectedServer.components.map((component) => (
+                  {selectedServer.components.slice(0, 200).map((component) => (
                     <article
-                      className="component-row"
+                      className={`component-row ${component.scope ?? "direct"}`}
                       key={`${component.id}-${component.reference}`}
                     >
                       <div>
-                        <span className="component-ecosystem">
-                          {component.ecosystem}
+                        <span className="component-labels">
+                          <span className="component-ecosystem">
+                            {component.ecosystem}
+                          </span>
+                          <span
+                            className={`component-scope ${component.scope ?? "direct"}`}
+                          >
+                            {component.scope === "transitive"
+                              ? "transitif"
+                              : "direct"}
+                          </span>
                         </span>
                         <strong>{component.name}</strong>
                         <small>
                           {component.version ?? "Version non déclarée"}
+                          {component.lockfile
+                            ? ` · ${component.lockfile}`
+                            : ""}
                         </small>
                       </div>
                       <div className="component-row-actions">
@@ -1177,6 +1194,13 @@ export default function Home() {
                       </div>
                     </article>
                   ))}
+                  {selectedServer.components.length > 200 ? (
+                    <p className="component-list-limit">
+                      200 composants affichés sur{" "}
+                      {selectedServer.components.length}. Le rapport exporté
+                      contient le graphe complet collecté.
+                    </p>
+                  ) : null}
                 </div>
               </section>
             ) : null}

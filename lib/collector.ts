@@ -15,6 +15,12 @@ import {
   type SupplyChainComponent,
 } from "./supply-chain.ts";
 import type { VulnerabilityScanSummary } from "./osv.ts";
+import {
+  analyzeLockfile,
+  discoverLockfilePaths,
+  enrichComponentsFromLockfiles,
+  type LockfileSummary,
+} from "./lockfiles.ts";
 
 export const COLLECTOR_SCHEMA_VERSION = "1.0" as const;
 export const MCP_PROTOCOL_VERSION = "2025-11-25";
@@ -65,6 +71,12 @@ export type CollectedServer = {
   configuration: Record<string, unknown>;
   redactions: Redaction[];
   components: SupplyChainComponent[];
+  componentGraph?: {
+    direct: number;
+    transitive: number;
+    truncated: boolean;
+    lockfiles: string[];
+  };
   probe: PassiveProbe;
 };
 
@@ -83,6 +95,7 @@ export type CollectorInventory = {
   };
   sources: CollectorSource[];
   servers: CollectedServer[];
+  lockfiles?: LockfileSummary[];
   vulnerabilityScan?: VulnerabilityScanSummary;
 };
 
@@ -105,6 +118,8 @@ export type CollectOptions = DiscoveryContext & {
   timeoutMs?: number;
   now?: () => Date;
   fetchImpl?: typeof fetch;
+  scanLockfiles?: boolean;
+  lockfilePaths?: string[];
 };
 
 const SENSITIVE_KEY =
@@ -131,6 +146,14 @@ function normalizeHomePath(filePath: string, home: string): string {
       : absolutePath;
 
   return normalized.replaceAll("\\", "/");
+}
+
+function normalizeWorkspacePath(filePath: string, workspace: string): string {
+  const childPath = relative(resolve(workspace), resolve(filePath));
+  if (childPath && !childPath.startsWith("..") && !isAbsolute(childPath)) {
+    return childPath.replaceAll("\\", "/");
+  }
+  return basename(filePath);
 }
 
 function deduplicateCandidates(candidates: CandidateFile[]): CandidateFile[] {
@@ -570,7 +593,7 @@ export async function probeConfiguration(
           capabilities: {},
           clientInfo: {
             name: "mcp-sentinel-collector",
-            version: "1.2.0",
+            version: "1.3.0",
           },
         },
       }),
@@ -693,6 +716,7 @@ export async function collectInventory(
 ): Promise<CollectorInventory> {
   const now = options.now ?? (() => new Date());
   const home = options.home ?? homedir();
+  const workspace = resolve(options.workspace ?? process.cwd());
   const defaults =
     options.candidates ??
     discoverCandidateFiles({
@@ -805,12 +829,76 @@ export async function collectInventory(
     });
   }
 
+  const explicitLockfiles = (options.lockfilePaths ?? []).map((filePath) =>
+    resolve(filePath),
+  );
+  const lockfilePaths = [
+    ...(options.scanLockfiles ? discoverLockfilePaths(workspace) : []),
+    ...explicitLockfiles,
+  ]
+    .filter(
+      (filePath, index, values) =>
+        values.findIndex(
+          (candidate) =>
+            resolve(candidate).toLowerCase() ===
+            resolve(filePath).toLowerCase(),
+        ) === index,
+    )
+    .slice(0, 50);
+  const explicitSet = new Set(
+    explicitLockfiles.map((filePath) => resolve(filePath).toLowerCase()),
+  );
+  const lockfileAnalyses = await Promise.all(
+    lockfilePaths.map((filePath) =>
+      analyzeLockfile(
+        filePath,
+        normalizeWorkspacePath(filePath, workspace),
+      ),
+    ),
+  );
+  const includedAnalyses = lockfileAnalyses.filter(
+    (analysis, index) =>
+      analysis.summary.status !== "missing" ||
+      explicitSet.has(resolve(lockfilePaths[index]).toLowerCase()),
+  );
+  const matchedServers = new Map<string, number>();
+  for (const server of servers) {
+    const enrichment = enrichComponentsFromLockfiles(
+      server.components,
+      includedAnalyses,
+    );
+    server.components = enrichment.components;
+    if (
+      enrichment.matchedLockfiles.size ||
+      enrichment.components.some(
+        (component) => component.scope === "transitive",
+      )
+    ) {
+      server.componentGraph = {
+        direct: enrichment.components.filter(
+          (component) => component.scope !== "transitive",
+        ).length,
+        transitive: enrichment.components.filter(
+          (component) => component.scope === "transitive",
+        ).length,
+        truncated: enrichment.truncated,
+        lockfiles: [...enrichment.matchedLockfiles],
+      };
+      for (const lockfile of enrichment.matchedLockfiles) {
+        matchedServers.set(
+          lockfile,
+          (matchedServers.get(lockfile) ?? 0) + 1,
+        );
+      }
+    }
+  }
+
   return {
     schemaVersion: COLLECTOR_SCHEMA_VERSION,
     generatedAt: now().toISOString(),
     collector: {
       name: "MCP Sentinel Collector",
-      version: "1.2.0",
+      version: "1.3.0",
       platform: options.platform ?? process.platform,
       security: {
         secretsRedacted: true,
@@ -820,5 +908,14 @@ export async function collectInventory(
     },
     sources,
     servers,
+    ...(includedAnalyses.length
+      ? {
+          lockfiles: includedAnalyses.map((analysis) => ({
+            ...analysis.summary,
+            matchedServers:
+              matchedServers.get(analysis.summary.path) ?? 0,
+          })),
+        }
+      : {}),
   };
 }

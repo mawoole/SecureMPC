@@ -8,9 +8,11 @@ import { createCycloneDxReport } from "../lib/supply-chain.ts";
 
 type CliOptions = {
   additionalPaths: string[];
+  lockfilePaths: string[];
   output: string;
   osv: boolean;
   probe: boolean;
+  scanLockfiles: boolean;
   sbomOutput?: string;
   stdout: boolean;
   timeoutMs: number;
@@ -31,6 +33,8 @@ Usage:
 Options:
   --path <fichier>       Ajoute un fichier de configuration explicite (répétable)
   --workspace <dossier>  Dossier où rechercher .vscode/mcp.json et .cursor/mcp.json
+  --lockfile <fichier>    Ajoute un package-lock.json, uv.lock ou poetry.lock
+  --no-lockfiles          Désactive la découverte des lockfiles du workspace
   --probe                Vérifie passivement les endpoints HTTPS distants
   --osv                  Interroge OSV.dev avec les PURL versionnés uniquement
   --sbom [fichier]       Produit aussi un SBOM CycloneDX 1.7
@@ -41,6 +45,7 @@ Options:
 
 Garanties du collecteur :
   - les secrets concrets sont remplacés avant l’écriture ;
+  - les lockfiles sont lus sans exécuter npm, uv, Poetry ou un serveur MCP ;
   - aucun en-tête d’authentification découvert n’est envoyé ;
   - avec --osv, seuls les PURL versionnés sont envoyés à OSV.dev ;
   - aucun serveur stdio ni outil MCP n’est exécuté.`;
@@ -57,9 +62,11 @@ function readValue(args: string[], index: number, option: string): string {
 function parseArguments(args: string[]): CliOptions {
   const options: CliOptions = {
     additionalPaths: [],
+    lockfilePaths: [],
     output: resolve("mcp-inventory.json"),
     osv: false,
     probe: false,
+    scanLockfiles: true,
     stdout: false,
     timeoutMs: 5_000,
   };
@@ -72,6 +79,10 @@ function parseArguments(args: string[]): CliOptions {
     }
     if (argument === "--probe") {
       options.probe = true;
+      continue;
+    }
+    if (argument === "--no-lockfiles") {
+      options.scanLockfiles = false;
       continue;
     }
     if (argument === "--osv") {
@@ -94,6 +105,13 @@ function parseArguments(args: string[]): CliOptions {
     }
     if (argument === "--path") {
       options.additionalPaths.push(
+        resolve(readValue(args, index, argument)),
+      );
+      index += 1;
+      continue;
+    }
+    if (argument === "--lockfile") {
+      options.lockfilePaths.push(
         resolve(readValue(args, index, argument)),
       );
       index += 1;
@@ -204,6 +222,13 @@ async function main() {
     (server) => server.probe.status === "reachable",
   ).length;
   const vulnerabilities = inventory.vulnerabilityScan?.vulnerabilities ?? 0;
+  const lockfiles = inventory.lockfiles?.filter((lockfile) =>
+    ["read", "partial"].includes(lockfile.status),
+  ).length ?? 0;
+  const transitive = inventory.servers.reduce(
+    (total, server) => total + (server.componentGraph?.transitive ?? 0),
+    0,
+  );
   process.stderr.write(
     [
       `${discovered} serveur${discovered > 1 ? "s" : ""} découvert${discovered > 1 ? "s" : ""}.`,
@@ -214,6 +239,9 @@ async function main() {
       options.osv
         ? `${vulnerabilities} avis OSV trouvé${vulnerabilities > 1 ? "s" : ""}.`
         : "Analyse OSV non demandée.",
+      options.scanLockfiles || options.lockfilePaths.length
+        ? `${lockfiles} lockfile${lockfiles > 1 ? "s" : ""} analysé${lockfiles > 1 ? "s" : ""}, ${transitive} dépendance${transitive > 1 ? "s" : ""} transitive${transitive > 1 ? "s" : ""} rattachée${transitive > 1 ? "s" : ""}.`
+        : "Analyse des lockfiles désactivée.",
       options.stdout ? "" : `Inventaire : ${options.output}`,
       options.sbomOutput ? `SBOM : ${options.sbomOutput}` : "",
     ]

@@ -33,6 +33,10 @@ export type SupplyChainComponent = {
   componentType: "library" | "container" | "application";
   pinStatus: ComponentPinStatus;
   evidence: string;
+  scope?: "direct" | "transitive";
+  dependencies?: string[];
+  lockfile?: string;
+  integrityStatus?: "recorded" | "missing";
   vulnerabilities?: ComponentVulnerability[];
 };
 
@@ -353,7 +357,7 @@ export function extractSupplyChainComponents(
     ...new Map(
       components.map((component) => [
         `${component.ecosystem}:${component.name}:${component.version ?? component.reference}`,
-        component,
+        { ...component, scope: "direct" as const },
       ]),
     ).values(),
   ];
@@ -376,7 +380,33 @@ export function createCycloneDxReport(
   const packageComponents = new Map<string, SupplyChainComponent>();
   for (const server of servers) {
     for (const component of server.components ?? []) {
-      packageComponents.set(componentBomRef(component), component);
+      const ref = componentBomRef(component);
+      const existing = packageComponents.get(ref);
+      packageComponents.set(
+        ref,
+        existing
+          ? {
+              ...existing,
+              dependencies: [
+                ...new Set([
+                  ...(existing.dependencies ?? []),
+                  ...(component.dependencies ?? []),
+                ]),
+              ],
+              vulnerabilities: [
+                ...new Map(
+                  [
+                    ...(existing.vulnerabilities ?? []),
+                    ...(component.vulnerabilities ?? []),
+                  ].map((vulnerability) => [
+                    vulnerability.id,
+                    vulnerability,
+                  ]),
+                ).values(),
+              ],
+            }
+          : component,
+      );
     }
   }
 
@@ -419,7 +449,7 @@ export function createCycloneDxReport(
           {
             type: "application",
             name: "MCP Sentinel",
-            version: "1.2.0",
+            version: "1.3.0",
           },
         ],
       },
@@ -475,6 +505,26 @@ export function createCycloneDxReport(
             name: "mcp-sentinel:evidence",
             value: component.evidence,
           },
+          {
+            name: "mcp-sentinel:scope",
+            value: component.scope ?? "direct",
+          },
+          ...(component.lockfile
+            ? [
+                {
+                  name: "mcp-sentinel:lockfile",
+                  value: component.lockfile,
+                },
+              ]
+            : []),
+          ...(component.integrityStatus
+            ? [
+                {
+                  name: "mcp-sentinel:integrity",
+                  value: component.integrityStatus,
+                },
+              ]
+            : []),
         ],
       })),
     ],
@@ -482,11 +532,19 @@ export function createCycloneDxReport(
       { ref: rootRef, dependsOn: serverRefs },
       ...servers.map((server, index) => ({
         ref: serverRefs[index],
-        dependsOn: (server.components ?? []).map(componentBomRef),
+        dependsOn: [
+          ...new Set(
+            (server.components ?? [])
+              .filter((component) => component.scope !== "transitive")
+              .map(componentBomRef),
+          ),
+        ],
       })),
-      ...[...packageComponents.keys()].map((ref) => ({
+      ...[...packageComponents.entries()].map(([ref, component]) => ({
         ref,
-        dependsOn: [],
+        dependsOn: (component.dependencies ?? []).filter((dependency) =>
+          packageComponents.has(dependency),
+        ),
       })),
     ],
     ...(vulnerabilityEntries.size
