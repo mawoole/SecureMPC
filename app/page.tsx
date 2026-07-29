@@ -473,7 +473,7 @@ export default function Home() {
   };
 
   const copyCollectorCommand = async () => {
-    await navigator.clipboard.writeText("npm run collect -- --probe");
+    await navigator.clipboard.writeText("npm run collect:security");
     setToast("Commande du collecteur copiée");
     window.setTimeout(() => setToast(""), 2200);
   };
@@ -1024,14 +1024,17 @@ export default function Home() {
             <div className="collector-command">
               <div>
                 <span>WINDOWS · macOS · LINUX</span>
-                <code>npm run collect -- --probe</code>
+                <code>npm run collect:security</code>
               </div>
               <button onClick={copyCollectorCommand}>Copier</button>
             </div>
 
             <ul className="collector-guarantees">
               <li>Aucun serveur stdio et aucun outil MCP n’est exécuté.</li>
-              <li>Aucun identifiant découvert n’est envoyé sur le réseau.</li>
+              <li>
+                OSV reçoit uniquement les PURL avec une version exacte, jamais
+                les configurations, chemins ou secrets.
+              </li>
               <li>
                 Seuls les endpoints HTTPS reçoivent une négociation{" "}
                 <code>initialize</code>.
@@ -1055,7 +1058,7 @@ export default function Home() {
             )}
 
             <p className="collector-help">
-              Sans vérification réseau : <code>npm run collect</code>. Ajoutez{" "}
+              Sans probe ni analyse OSV : <code>npm run collect</code>. Ajoutez{" "}
               <code>--path chemin/vers/mcp.json</code> pour un fichier
               personnalisé.
             </p>
@@ -1129,7 +1132,21 @@ export default function Home() {
                       {selectedServer.components.length > 1 ? "s" : ""}
                     </strong>
                   </div>
-                  <span aria-hidden="true">⬡</span>
+                  {selectedServer.vulnerabilityScan ? (
+                    <span
+                      className={`osv-status ${selectedServer.vulnerabilityScan.status}`}
+                      title={selectedServer.vulnerabilityScan.message}
+                    >
+                      OSV{" "}
+                      {selectedServer.vulnerabilityScan.status === "complete"
+                        ? "vérifié"
+                        : selectedServer.vulnerabilityScan.status === "partial"
+                          ? "partiel"
+                          : "indisponible"}
+                    </span>
+                  ) : (
+                    <span aria-hidden="true">⬡</span>
+                  )}
                 </div>
                 <div className="component-list">
                   {selectedServer.components.map((component) => (
@@ -1146,11 +1163,18 @@ export default function Home() {
                           {component.version ?? "Version non déclarée"}
                         </small>
                       </div>
-                      <span
-                        className={`pin-status ${component.pinStatus}`}
-                      >
-                        {pinStatusLabel[component.pinStatus]}
-                      </span>
+                      <div className="component-row-actions">
+                        {component.vulnerabilities?.length ? (
+                          <span className="vulnerability-count">
+                            {component.vulnerabilities.length} avis
+                          </span>
+                        ) : null}
+                        <span
+                          className={`pin-status ${component.pinStatus}`}
+                        >
+                          {pinStatusLabel[component.pinStatus]}
+                        </span>
+                      </div>
                     </article>
                   ))}
                 </div>

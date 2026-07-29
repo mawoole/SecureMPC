@@ -295,3 +295,93 @@ test("imports a redacted collector inventory with passive probe evidence", () =>
     ),
   );
 });
+
+test("turns OSV advisories into scored findings and SARIF rules", () => {
+  const servers = auditConfiguration(
+    JSON.stringify({
+      schemaVersion: "1.0",
+      generatedAt: "2026-07-29T12:00:00.000Z",
+      collector: {
+        name: "MCP Sentinel Collector",
+        version: "1.2.0",
+        platform: "linux",
+      },
+      vulnerabilityScan: {
+        provider: "OSV.dev",
+        status: "complete",
+        checkedAt: "2026-07-29T12:00:00.000Z",
+        queriedComponents: 1,
+        skippedComponents: 0,
+        vulnerabilities: 1,
+        message: "Analyse OSV terminée.",
+      },
+      sources: [],
+      servers: [
+        {
+          id: "vulnerable",
+          name: "vulnerable-server",
+          source: {
+            client: "VS Code",
+            path: "~/.config/Code/User/mcp.json",
+          },
+          configuration: {
+            command: "npx",
+            args: ["-y", "@acme/mcp-server@1.2.3"],
+          },
+          redactions: [],
+          components: [
+            {
+              id: "npm-acme-mcp",
+              name: "@acme/mcp-server",
+              ecosystem: "npm",
+              componentType: "library",
+              version: "1.2.3",
+              purl: "pkg:npm/%40acme/mcp-server@1.2.3",
+              pinStatus: "pinned",
+              reference: "@acme/mcp-server@1.2.3",
+              evidence: "npx",
+              vulnerabilities: [
+                {
+                  id: "GHSA-test-1234",
+                  aliases: ["CVE-2026-1234"],
+                  summary: "Injection de commande",
+                  severity: "high",
+                  advisoryUrl: "javascript:alert('unsafe')",
+                  fixedVersion: "1.2.4",
+                },
+              ],
+            },
+          ],
+          probe: {
+            status: "skipped-stdio",
+            checkedAt: "2026-07-29T12:00:00.000Z",
+            durationMs: 0,
+            message: "Serveur stdio non exécuté.",
+          },
+        },
+      ],
+    }),
+  );
+
+  const finding = servers[0].findings.find(
+    (entry) => entry.rule === "MCP-VULN-01",
+  );
+  assert.equal(finding?.severity, "high");
+  assert.match(finding?.remediation ?? "", /1\.2\.4/);
+  assert.equal(
+    finding?.snippet,
+    "https://osv.dev/vulnerability/GHSA-test-1234",
+  );
+  assert.equal(servers[0].vulnerabilityScan?.status, "complete");
+  assert.ok(servers[0].score < 100);
+
+  const sarif = createSarifReport(
+    servers,
+    new Date("2026-07-29T12:00:00.000Z"),
+  );
+  assert.ok(
+    sarif.runs[0].tool.driver.rules.some(
+      (rule) => rule.id === "MCP-VULN-01",
+    ),
+  );
+});

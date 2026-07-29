@@ -1834,6 +1834,31 @@ button.table-row:hover {
   width: 27px;
 }
 
+.supply-chain-heading > .osv-status {
+  font-size: 7px;
+  font-weight: 760;
+  height: auto;
+  letter-spacing: 0.04em;
+  padding: 6px 8px;
+  text-transform: uppercase;
+  width: auto;
+}
+
+.supply-chain-heading > .osv-status.complete {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.supply-chain-heading > .osv-status.partial {
+  background: var(--amber-soft);
+  color: #93671e;
+}
+
+.supply-chain-heading > .osv-status.error {
+  background: var(--coral-soft);
+  color: var(--coral);
+}
+
 .component-list {
   border-top: 1px solid var(--line);
   display: flex;
@@ -1857,6 +1882,14 @@ button.table-row:hover {
   display: grid;
   gap: 3px;
   min-width: 0;
+}
+
+.component-row > .component-row-actions {
+  align-items: flex-end;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 5px;
 }
 
 .component-row strong {
@@ -1902,6 +1935,16 @@ button.table-row:hover {
   background: var(--amber-soft);
   border-color: #ead6a4;
   color: #93671e;
+}
+
+.vulnerability-count {
+  background: var(--coral-soft);
+  border: 1px solid #f1c2ba;
+  border-radius: 999px;
+  color: var(--coral);
+  font-size: 7px;
+  font-weight: 760;
+  padding: 4px 7px;
 }
 
 .probe-card {

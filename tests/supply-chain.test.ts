@@ -91,6 +91,18 @@ test("generates a deduplicated CycloneDX 1.7 dependency graph", () => {
     command: "npx",
     args: ["-y", "@modelcontextprotocol/server-filesystem@1.2.3"],
   });
+  components[0].vulnerabilities = [
+    {
+      id: "GHSA-test-1234",
+      aliases: ["CVE-2026-1234"],
+      summary: "Avis de sécurité de test",
+      severity: "high",
+      modified: "2026-07-28T10:00:00Z",
+      advisoryUrl:
+        "https://osv.dev/vulnerability/GHSA-test-1234",
+      fixedVersion: "1.2.4",
+    },
+  ];
   const report = createCycloneDxReport(
     [
       {
@@ -134,4 +146,11 @@ test("generates a deduplicated CycloneDX 1.7 dependency graph", () => {
     1,
   );
   assert.equal(report.dependencies.length, 4);
+  assert.equal(report.vulnerabilities?.length, 1);
+  assert.equal(report.vulnerabilities?.[0].id, "GHSA-test-1234");
+  assert.equal(report.vulnerabilities?.[0].affects.length, 1);
+  assert.match(
+    report.vulnerabilities?.[0].recommendation ?? "",
+    /1\.2\.4/,
+  );
 });

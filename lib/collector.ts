@@ -14,6 +14,7 @@ import {
   extractSupplyChainComponents,
   type SupplyChainComponent,
 } from "./supply-chain.ts";
+import type { VulnerabilityScanSummary } from "./osv.ts";
 
 export const COLLECTOR_SCHEMA_VERSION = "1.0" as const;
 export const MCP_PROTOCOL_VERSION = "2025-11-25";
@@ -82,6 +83,7 @@ export type CollectorInventory = {
   };
   sources: CollectorSource[];
   servers: CollectedServer[];
+  vulnerabilityScan?: VulnerabilityScanSummary;
 };
 
 export type CandidateFile = {
@@ -568,7 +570,7 @@ export async function probeConfiguration(
           capabilities: {},
           clientInfo: {
             name: "mcp-sentinel-collector",
-            version: "1.0.0",
+            version: "1.2.0",
           },
         },
       }),
@@ -808,7 +810,7 @@ export async function collectInventory(
     generatedAt: now().toISOString(),
     collector: {
       name: "MCP Sentinel Collector",
-      version: "1.1.0",
+      version: "1.2.0",
       platform: options.platform ?? process.platform,
       security: {
         secretsRedacted: true,

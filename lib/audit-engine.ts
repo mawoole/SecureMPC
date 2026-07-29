@@ -2,6 +2,7 @@ import {
   extractSupplyChainComponents,
   type SupplyChainComponent,
 } from "./supply-chain.ts";
+import type { VulnerabilityScanSummary } from "./osv.ts";
 
 export type Severity = "critical" | "high" | "medium";
 export type ServerStatus = "critical" | "attention" | "secure";
@@ -50,6 +51,7 @@ export type McpServer = {
   lastScan: string;
   probe?: PassiveProbe;
   components?: SupplyChainComponent[];
+  vulnerabilityScan?: VulnerabilityScanSummary;
 };
 
 export type SecurityRule = {
@@ -158,6 +160,13 @@ export const SECURITY_RULES: SecurityRule[] = [
     detail:
       "Vérifie passivement la disponibilité, la version et les capacités des endpoints HTTPS.",
     category: "Protocole",
+  },
+  {
+    code: "MCP-VULN-01",
+    title: "Vulnérabilités connues",
+    detail:
+      "Croise les composants versionnés avec les avis agrégés par OSV.dev.",
+    category: "Supply chain",
   },
 ];
 
@@ -305,6 +314,145 @@ function slugify(value: string): string {
   );
 }
 
+function importedText(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const cleaned = value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned ? cleaned.slice(0, maxLength) : undefined;
+}
+
+function sanitizeImportedComponent(
+  value: unknown,
+): SupplyChainComponent | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const ecosystem = importedText(record.ecosystem, 20);
+  const componentType = importedText(record.componentType, 20);
+  const pinStatus = importedText(record.pinStatus, 30);
+  const id = importedText(record.id, 200);
+  const name = importedText(record.name, 300);
+  const reference = importedText(record.reference, 500);
+  const evidence = importedText(record.evidence, 100);
+  if (
+    !id ||
+    !name ||
+    !reference ||
+    !evidence ||
+    !["npm", "pypi", "oci", "executable"].includes(ecosystem ?? "") ||
+    !["library", "container", "application"].includes(componentType ?? "") ||
+    ![
+      "pinned",
+      "unpinned",
+      "mutable",
+      "unknown",
+      "not-applicable",
+    ].includes(pinStatus ?? "")
+  ) {
+    return undefined;
+  }
+
+  const vulnerabilities = Array.isArray(record.vulnerabilities)
+    ? record.vulnerabilities.flatMap((value) => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          return [];
+        }
+        const vulnerability = value as Record<string, unknown>;
+        const vulnerabilityId = importedText(vulnerability.id, 100);
+        const summary = importedText(vulnerability.summary, 500);
+        const severity = importedText(vulnerability.severity, 20);
+        if (
+          !vulnerabilityId ||
+          !summary ||
+          !["critical", "high", "medium", "low", "unknown"].includes(
+            severity ?? "",
+          )
+        ) {
+          return [];
+        }
+        const suppliedUrl = importedText(vulnerability.advisoryUrl, 2_048);
+        const advisoryUrl =
+          suppliedUrl?.startsWith("https://")
+            ? suppliedUrl
+            : `https://osv.dev/vulnerability/${encodeURIComponent(vulnerabilityId)}`;
+        const modified = importedText(vulnerability.modified, 100);
+        const fixed = importedText(vulnerability.fixedVersion, 100);
+        return [
+          {
+            id: vulnerabilityId,
+            aliases: Array.isArray(vulnerability.aliases)
+              ? vulnerability.aliases
+                  .map((alias) => importedText(alias, 100))
+                  .filter((alias): alias is string => Boolean(alias))
+                  .slice(0, 10)
+              : [],
+            summary,
+            severity: severity as NonNullable<
+              SupplyChainComponent["vulnerabilities"]
+            >[number]["severity"],
+            ...(modified ? { modified } : {}),
+            advisoryUrl,
+            ...(fixed ? { fixedVersion: fixed } : {}),
+          },
+        ];
+      })
+    : [];
+  const version = importedText(record.version, 100);
+  const purl = importedText(record.purl, 2_048);
+
+  return {
+    id,
+    ecosystem: ecosystem as SupplyChainComponent["ecosystem"],
+    name,
+    ...(version ? { version } : {}),
+    reference,
+    ...(purl?.startsWith("pkg:") ? { purl } : {}),
+    componentType:
+      componentType as SupplyChainComponent["componentType"],
+    pinStatus: pinStatus as SupplyChainComponent["pinStatus"],
+    evidence,
+    vulnerabilities,
+  };
+}
+
+function sanitizeVulnerabilityScan(
+  value: unknown,
+): VulnerabilityScanSummary | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const status = importedText(record.status, 20);
+  const checkedAt = importedText(record.checkedAt, 100);
+  const message = importedText(record.message, 500);
+  if (
+    record.provider !== "OSV.dev" ||
+    !["complete", "partial", "error"].includes(status ?? "") ||
+    !checkedAt ||
+    !message
+  ) {
+    return undefined;
+  }
+  const count = (candidate: unknown) =>
+    typeof candidate === "number" &&
+    Number.isSafeInteger(candidate) &&
+    candidate >= 0
+      ? candidate
+      : 0;
+  return {
+    provider: "OSV.dev",
+    status: status as VulnerabilityScanSummary["status"],
+    checkedAt,
+    queriedComponents: count(record.queriedComponents),
+    skippedComponents: count(record.skippedComponents),
+    vulnerabilities: count(record.vulnerabilities),
+    message,
+  };
+}
+
 function serverStatus(findings: Finding[]): ServerStatus {
   if (findings.some((finding) => finding.severity === "critical")) {
     return "critical";
@@ -368,6 +516,10 @@ export function auditConfiguration(raw: string): McpServer[] {
     Array.isArray(parsedRecord.servers);
 
   if (isCollectorInventory) {
+    const vulnerabilityScan = sanitizeVulnerabilityScan(
+      parsedRecord.vulnerabilityScan,
+    );
+
     return (parsedRecord.servers as unknown[]).map((entry, index) => {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
         throw new Error(
@@ -399,6 +551,14 @@ export function auditConfiguration(raw: string): McpServer[] {
         ? collected.redactions
         : [];
       let findings = [...base.findings];
+      const components = Array.isArray(collected.components)
+        ? collected.components
+            .map(sanitizeImportedComponent)
+            .filter(
+              (component): component is SupplyChainComponent =>
+                component !== undefined,
+            )
+        : base.components;
 
       if (
         redactions.length > 0 &&
@@ -415,6 +575,54 @@ export function auditConfiguration(raw: string): McpServer[] {
             "MCP-SEC-01",
           ),
         );
+      }
+
+      for (const [componentIndex, component] of (
+        components ?? []
+      ).entries()) {
+        for (const [vulnerabilityIndex, vulnerability] of (
+          component.vulnerabilities ?? []
+        ).entries()) {
+          const vulnerabilityId =
+            typeof vulnerability.id === "string"
+              ? vulnerability.id.slice(0, 100)
+              : "OSV";
+          const summary =
+            typeof vulnerability.summary === "string"
+              ? vulnerability.summary
+                  .replace(/[\u0000-\u001f\u007f]/g, " ")
+                  .slice(0, 500)
+              : `Avis de sécurité ${vulnerabilityId}`;
+          const severity =
+            vulnerability.severity === "critical"
+              ? "critical"
+              : vulnerability.severity === "high"
+                ? "high"
+                : "medium";
+          const advisoryUrl =
+            typeof vulnerability.advisoryUrl === "string" &&
+            vulnerability.advisoryUrl.startsWith("https://")
+              ? vulnerability.advisoryUrl
+              : `https://osv.dev/vulnerability/${encodeURIComponent(vulnerabilityId)}`;
+          const fixedVersion =
+            typeof vulnerability.fixedVersion === "string"
+              ? vulnerability.fixedVersion.slice(0, 100)
+              : undefined;
+
+          findings.push(
+            makeFinding(
+              `collected-${index}-${slugify(name)}-osv-${componentIndex}-${vulnerabilityIndex}`,
+              severity,
+              `Vulnérabilité connue ${vulnerabilityId}`,
+              `${summary} Composant concerné : ${component.name}${component.version ? ` ${component.version}` : ""}.`,
+              fixedVersion
+                ? `Mettez à jour ${component.name} vers la version corrigée ${fixedVersion} ou une version ultérieure compatible, puis régénérez l’inventaire.`
+                : `Consultez l’avis, identifiez une version corrigée compatible et régénérez l’inventaire avant remise en service.`,
+              advisoryUrl,
+              "MCP-VULN-01",
+            ),
+          );
+        }
       }
 
       const probe =
@@ -478,6 +686,8 @@ export function auditConfiguration(raw: string): McpServer[] {
         controls: SECURITY_RULES.length,
         lastScan: "collecté à l’instant",
         probe,
+        components,
+        vulnerabilityScan,
       };
     });
   }
@@ -679,7 +889,16 @@ function cloneForReport(server: McpServer): McpServer {
   return {
     ...server,
     findings: server.findings.map((finding) => ({ ...finding })),
-    components: server.components?.map((component) => ({ ...component })),
+    components: server.components?.map((component) => ({
+      ...component,
+      vulnerabilities: component.vulnerabilities?.map((vulnerability) => ({
+        ...vulnerability,
+        aliases: [...vulnerability.aliases],
+      })),
+    })),
+    vulnerabilityScan: server.vulnerabilityScan
+      ? { ...server.vulnerabilityScan }
+      : undefined,
   };
 }
 
