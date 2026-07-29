@@ -24,6 +24,7 @@ directement applicables.
 - affichage de la version négociée et des capacités annoncées ;
 - inventaire des composants npm, PyPI, OCI et exécutables locaux ;
 - détection des tags d’images mutables et dépendances non verrouillées ;
+- résolution des dépendances transitives depuis les lockfiles npm, uv et Poetry ;
 - recherche optionnelle des vulnérabilités connues via OSV.dev ;
 - prise en charge des objets `mcpServers` utilisés par Claude Desktop, Cursor
   et VS Code ;
@@ -51,6 +52,8 @@ par un collecteur local explicite :
 - les secrets concrets sont remplacés par `${REDACTED}` avant l’écriture de
   l’inventaire ;
 - le collecteur ne lance jamais les commandes des serveurs `stdio` ;
+- les lockfiles sont lus comme des données : npm, uv et Poetry ne sont jamais
+  exécutés ;
 - le probe n’envoie jamais les en-têtes d’authentification trouvés dans les
   configurations ;
 - le probe ne contacte que les endpoints HTTPS et n’appelle aucun outil MCP ;
@@ -188,6 +191,32 @@ Il utilise CycloneDX 1.7, des identifiants
 [Package URL](https://github.com/package-url/purl-spec) et un graphe reliant
 chaque serveur MCP à ses composants détectés.
 
+### Dépendances transitives et lockfiles
+
+Par défaut, le collecteur recherche à la racine du workspace :
+
+- `package-lock.json` et `npm-shrinkwrap.json` ;
+- `uv.lock` ;
+- `poetry.lock`.
+
+Il lit au maximum 20 Mo et 5 000 composants par lockfile, sans lancer de
+gestionnaire de paquets. Un graphe n’est rattaché à un serveur que si le nom et
+la version exacte de son composant direct correspondent à une entrée du
+lockfile. Chaque serveur est limité à 1 000 composants collectés ; un
+dépassement est explicitement signalé comme tronqué.
+
+Pour ajouter un lockfile situé ailleurs ou désactiver cette découverte :
+
+```bash
+npm run collect -- --lockfile ../serveur/uv.lock
+npm run collect -- --no-lockfiles
+```
+
+Les dépendances transitives sont marquées dans l’interface et reliées par leurs
+vraies arêtes dans CycloneDX. Lorsqu’un avis OSV concerne une dépendance
+transitive, la remédiation indique la dépendance directe qui l’introduit et
+demande de régénérer le lockfile.
+
 ### Vulnérabilités connues avec OSV
 
 L’analyse OSV est explicite et ne concerne que les composants directs dont la
@@ -263,6 +292,7 @@ app/
 lib/
   audit-engine.ts  Règles, scoring et exports JSON/SARIF
   collector.ts     Découverte, redaction et probe MCP passif
+  lockfiles.ts     Lecture bornée et graphe transitif npm/Python
   osv.ts           Client OSV limité aux PURL versionnés
   supply-chain.ts  Détection des composants et export CycloneDX
 tools/
@@ -270,6 +300,7 @@ tools/
 tests/
   audit-engine.test.ts     Tests de sécurité du moteur
   collector.test.ts        Tests du collecteur et du protocole passif
+  lockfiles.test.ts        Tests des graphes package-lock, uv et Poetry
   osv.test.ts              Tests du client OSV et de ses limites réseau
   supply-chain.test.ts     Tests npm, PyPI, OCI, PURL et CycloneDX
   rendered-html.test.mjs   Tests du rendu de production
@@ -289,6 +320,8 @@ public/
 | `npm run collect:security` | Ajoute le probe, l’analyse OSV et le SBOM |
 | `npm run collect -- --probe` | Ajoute une négociation passive des endpoints HTTPS |
 | `npm run collect -- --osv` | Interroge OSV avec les seuls PURL versionnés |
+| `npm run collect -- --lockfile <fichier>` | Ajoute un lockfile explicite |
+| `npm run collect -- --no-lockfiles` | Désactive la découverte des lockfiles |
 | `npm run lint` | Vérifie les règles de qualité du code |
 | `npm run test:unit` | Teste le moteur, le collecteur et la non-divulgation des secrets |
 | `npm run test:rendered` | Vérifie le HTML produit par l’application |
@@ -308,9 +341,11 @@ l’application et vérifie le HTML produit.
   donc pas leur comportement à l’exécution ;
 - le probe distant valide la négociation, pas les permissions effectives de
   chaque outil ;
-- le SBOM et l’analyse OSV décrivent uniquement les composants directement
-  visibles dans les commandes ; les dépendances transitives ne sont pas encore
-  résolues ;
+- les dépendances transitives sont résolues uniquement lorsqu’un composant
+  direct versionné correspond à `package-lock.json`, `npm-shrinkwrap.json`,
+  `uv.lock` ou `poetry.lock` ;
+- `pnpm-lock.yaml`, `yarn.lock`, les workspaces complexes et les dépendances
+  conditionnelles Python ne sont pas encore résolus ;
 - OSV peut ne pas disposer d’un avis ou d’une sévérité normalisée pour tous les
   écosystèmes ; le statut de l’analyse doit donc être vérifié dans l’inventaire ;
 - elle ne confirme pas les permissions effectives côté GitHub, base de données,
@@ -320,7 +355,8 @@ l’application et vérifie le HTML produit.
 
 ## Prochaines étapes possibles
 
-- enrichissement du SBOM avec les dépendances transitives issues des lockfiles ;
+- prise en charge de `pnpm-lock.yaml`, `yarn.lock` et des workspaces monorepo ;
+- vérification de provenance des paquets et images (SLSA/signatures) ;
 - gestion d’exceptions documentées et datées ;
 - export d’un rapport PDF ;
 - historique persistant et suivi des écarts dans le temps ;

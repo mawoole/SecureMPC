@@ -340,6 +340,26 @@ test("turns OSV advisories into scored findings and SARIF rules", () => {
               pinStatus: "pinned",
               reference: "@acme/mcp-server@1.2.3",
               evidence: "npx",
+              scope: "direct",
+              dependencies: ["pkg:npm/helper@2.0.0"],
+              lockfile: "package-lock.json",
+              integrityStatus: "recorded",
+              vulnerabilities: [],
+            },
+            {
+              id: "npm-helper",
+              name: "helper",
+              ecosystem: "npm",
+              componentType: "library",
+              version: "2.0.0",
+              purl: "pkg:npm/helper@2.0.0",
+              pinStatus: "pinned",
+              reference: "helper@2.0.0",
+              evidence: "Version verrouillée dans package-lock.json.",
+              scope: "transitive",
+              dependencies: [],
+              lockfile: "package-lock.json",
+              integrityStatus: "recorded",
               vulnerabilities: [
                 {
                   id: "GHSA-test-1234",
@@ -352,6 +372,12 @@ test("turns OSV advisories into scored findings and SARIF rules", () => {
               ],
             },
           ],
+          componentGraph: {
+            direct: 1,
+            transitive: 1,
+            truncated: false,
+            lockfiles: ["package-lock.json"],
+          },
           probe: {
             status: "skipped-stdio",
             checkedAt: "2026-07-29T12:00:00.000Z",
@@ -368,11 +394,14 @@ test("turns OSV advisories into scored findings and SARIF rules", () => {
   );
   assert.equal(finding?.severity, "high");
   assert.match(finding?.remediation ?? "", /1\.2\.4/);
+  assert.match(finding?.remediation ?? "", /@acme\/mcp-server/);
+  assert.match(finding?.description ?? "", /Dépendance transitive/);
   assert.equal(
     finding?.snippet,
     "https://osv.dev/vulnerability/GHSA-test-1234",
   );
   assert.equal(servers[0].vulnerabilityScan?.status, "complete");
+  assert.equal(servers[0].componentGraph?.transitive, 1);
   assert.ok(servers[0].score < 100);
 
   const sarif = createSarifReport(

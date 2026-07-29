@@ -1878,6 +1878,10 @@ button.table-row:hover {
   border-top: 1px solid var(--line);
 }
 
+.component-row.transitive {
+  padding-left: 12px;
+}
+
 .component-row > div {
   display: grid;
   gap: 3px;
@@ -1911,6 +1915,37 @@ button.table-row:hover {
   font-weight: 740;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.component-labels {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.component-scope {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 6px;
+  font-weight: 720;
+  letter-spacing: 0.06em;
+  padding: 2px 5px;
+  text-transform: uppercase;
+}
+
+.component-scope.direct {
+  border-color: #bed0f4;
+  color: var(--cobalt);
+}
+
+.component-list-limit {
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.5;
+  margin: 0;
+  padding: 10px 0 2px;
 }
 
 .pin-status {
