@@ -1,5 +1,7 @@
 # MCP Sentinel
 
+[![CI](https://github.com/mawoole/SecureMPC/actions/workflows/ci.yml/badge.svg)](https://github.com/mawoole/SecureMPC/actions/workflows/ci.yml)
+
 ![Aperçu MCP Sentinel](public/og.png)
 
 MCP Sentinel est une application web d’audit de configurations MCP
@@ -26,6 +28,7 @@ directement applicables.
 - score de sécurité global et par serveur ;
 - priorisation par criticité ;
 - remédiations expliquées avec extraits de configuration copiables ;
+- export d’un rapport JSON ou SARIF exploitable par les outils de sécurité ;
 - vues dédiées aux serveurs, règles et audits ;
 - interface responsive et accessible au clavier.
 
@@ -125,9 +128,14 @@ Principaux fichiers :
 
 ```text
 app/
-  page.tsx       Interface et moteur d’analyse statique
+  page.tsx       Interface et orchestration des audits
   globals.css    Système visuel responsive
   layout.tsx     Métadonnées et partage social
+lib/
+  audit-engine.ts  Règles, scoring et exports JSON/SARIF
+tests/
+  audit-engine.test.ts     Tests de sécurité du moteur
+  rendered-html.test.mjs   Tests du rendu de production
 public/
   og.png         Carte d’aperçu du projet
 ```
@@ -140,7 +148,16 @@ public/
 | `npm run build` | Produit et valide la version de production |
 | `npm run start` | Lance la version construite |
 | `npm run lint` | Vérifie les règles de qualité du code |
-| `npm test` | Construit puis exécute les tests du HTML rendu |
+| `npm run test:unit` | Teste le moteur d’audit et la non-divulgation des secrets |
+| `npm run test:rendered` | Vérifie le HTML produit par l’application |
+| `npm test` | Construit puis exécute l’ensemble des tests |
+
+## Intégration continue
+
+Le workflow GitHub Actions `.github/workflows/ci.yml` s’exécute sur chaque pull
+request et chaque mise à jour de `main`. Il installe les dépendances, lance le
+lint, construit l’application et exécute les tests du moteur ainsi que du HTML
+rendu.
 
 ## Limites actuelles
 
@@ -159,7 +176,7 @@ public/
 - analyse de manifeste et SBOM des paquets exécutés ;
 - tests réseau contrôlés avec autorisation explicite ;
 - gestion d’exceptions documentées et datées ;
-- export SARIF, JSON et rapport PDF ;
+- export d’un rapport PDF ;
 - historique persistant et suivi des écarts dans le temps ;
 - intégration CI pour bloquer les configurations à haut risque.
 
