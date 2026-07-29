@@ -23,6 +23,26 @@ export type ComponentVulnerability = {
   fixedVersion?: string;
 };
 
+export type VerificationState =
+  | "verified"
+  | "missing"
+  | "failed"
+  | "unverifiable"
+  | "error"
+  | "not-applicable";
+
+export type ComponentProvenance = {
+  provider: "npm-registry-sigstore";
+  checkedAt: string;
+  registrySignature: VerificationState;
+  slsaProvenance: VerificationState;
+  subjectDigest: "matched" | "mismatched" | "unavailable";
+  identityPolicy: "matched" | "mismatched" | "not-configured";
+  sourceRepository?: string;
+  builderId?: string;
+  message: string;
+};
+
 export type SupplyChainComponent = {
   id: string;
   ecosystem: ComponentEcosystem;
@@ -37,6 +57,9 @@ export type SupplyChainComponent = {
   dependencies?: string[];
   lockfile?: string;
   integrityStatus?: "recorded" | "missing";
+  integrity?: string;
+  workspace?: string;
+  provenance?: ComponentProvenance;
   vulnerabilities?: ComponentVulnerability[];
 };
 
@@ -523,6 +546,50 @@ export function createCycloneDxReport(
                   name: "mcp-sentinel:integrity",
                   value: component.integrityStatus,
                 },
+              ]
+            : []),
+          ...(component.workspace
+            ? [
+                {
+                  name: "mcp-sentinel:workspace",
+                  value: component.workspace,
+                },
+              ]
+            : []),
+          ...(component.provenance
+            ? [
+                {
+                  name: "mcp-sentinel:registry-signature",
+                  value: component.provenance.registrySignature,
+                },
+                {
+                  name: "mcp-sentinel:slsa-provenance",
+                  value: component.provenance.slsaProvenance,
+                },
+                {
+                  name: "mcp-sentinel:provenance-subject-digest",
+                  value: component.provenance.subjectDigest,
+                },
+                {
+                  name: "mcp-sentinel:provenance-identity-policy",
+                  value: component.provenance.identityPolicy,
+                },
+                ...(component.provenance.sourceRepository
+                  ? [
+                      {
+                        name: "mcp-sentinel:source-repository",
+                        value: component.provenance.sourceRepository,
+                      },
+                    ]
+                  : []),
+                ...(component.provenance.builderId
+                  ? [
+                      {
+                        name: "mcp-sentinel:builder-id",
+                        value: component.provenance.builderId,
+                      },
+                    ]
+                  : []),
               ]
             : []),
         ],

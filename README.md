@@ -24,7 +24,11 @@ directement applicables.
 - affichage de la version négociée et des capacités annoncées ;
 - inventaire des composants npm, PyPI, OCI et exécutables locaux ;
 - détection des tags d’images mutables et dépendances non verrouillées ;
-- résolution des dépendances transitives depuis les lockfiles npm, uv et Poetry ;
+- résolution des dépendances transitives depuis les lockfiles npm, pnpm, Yarn,
+  uv et Poetry ;
+- découverte bornée des packages npm/pnpm/Yarn d’un monorepo ;
+- vérification cryptographique des signatures npm et des attestations SLSA
+  avec Sigstore ;
 - recherche optionnelle des vulnérabilités connues via OSV.dev ;
 - prise en charge des objets `mcpServers` utilisés par Claude Desktop, Cursor
   et VS Code ;
@@ -52,14 +56,19 @@ par un collecteur local explicite :
 - les secrets concrets sont remplacés par `${REDACTED}` avant l’écriture de
   l’inventaire ;
 - le collecteur ne lance jamais les commandes des serveurs `stdio` ;
-- les lockfiles sont lus comme des données : npm, uv et Poetry ne sont jamais
-  exécutés ;
+- les lockfiles sont lus comme des données : npm, pnpm, Yarn, uv et Poetry ne
+  sont jamais exécutés ;
 - le probe n’envoie jamais les en-têtes d’authentification trouvés dans les
   configurations ;
 - le probe ne contacte que les endpoints HTTPS et n’appelle aucun outil MCP ;
 - l’analyse OSV est désactivée par défaut ; avec `--osv`, seuls les PURL des
   composants ayant une version exacte sont envoyés à `api.osv.dev` ;
 - aucun chemin, configuration, en-tête ou secret n’est envoyé à OSV ;
+- la vérification `--provenance` est désactivée par défaut ; elle consulte le
+  registre npm public avec le nom et la version du paquet, puis rapproche le
+  digest public de celui du lockfile ;
+- les attestations SLSA sont validées localement avec les racines de confiance
+  et journaux de transparence Sigstore ;
 - les données de démonstration peuvent être restaurées à tout moment.
 
 Même avec ces protections, évitez de partager ou de committer une configuration
@@ -193,9 +202,12 @@ chaque serveur MCP à ses composants détectés.
 
 ### Dépendances transitives et lockfiles
 
-Par défaut, le collecteur recherche à la racine du workspace :
+Par défaut, le collecteur recherche dans le workspace, jusqu’à six niveaux et
+50 lockfiles :
 
 - `package-lock.json` et `npm-shrinkwrap.json` ;
+- `pnpm-lock.yaml` ;
+- `yarn.lock` classique (v1) et moderne (Berry) ;
 - `uv.lock` ;
 - `poetry.lock`.
 
@@ -203,7 +215,15 @@ Il lit au maximum 20 Mo et 5 000 composants par lockfile, sans lancer de
 gestionnaire de paquets. Un graphe n’est rattaché à un serveur que si le nom et
 la version exacte de son composant direct correspondent à une entrée du
 lockfile. Chaque serveur est limité à 1 000 composants collectés ; un
-dépassement est explicitement signalé comme tronqué.
+dépassement est explicitement signalé comme tronqué. Les répertoires de build,
+les caches, `.git` et `node_modules` ne sont pas parcourus.
+
+Pour un monorepo, le collecteur lit les motifs `workspaces` du `package.json`
+racine et `packages` de `pnpm-workspace.yaml`, dans une limite de 250 manifests.
+Il rattache une commande locale au package le plus précis à partir de `cwd`, du
+script `npm|pnpm|yarn run` ou du chemin de l’exécutable. Les importers pnpm et
+npm conservent les frontières entre packages : les dépendances d’une
+application voisine ne sont pas ajoutées au serveur MCP.
 
 Pour ajouter un lockfile situé ailleurs ou désactiver cette découverte :
 
@@ -217,11 +237,52 @@ vraies arêtes dans CycloneDX. Lorsqu’un avis OSV concerne une dépendance
 transitive, la remédiation indique la dépendance directe qui l’introduit et
 demande de régénérer le lockfile.
 
+### Provenance SLSA et signatures npm
+
+La vérification explicite suivante couvre tous les composants npm versionnés
+et rattachés aux serveurs, directs comme transitifs :
+
+```bash
+npm run collect -- --provenance
+```
+
+Pour chaque composant, MCP Sentinel :
+
+1. exige que l’intégrité SRI du lockfile corresponde à `dist.integrity` ;
+2. vérifie la signature ECDSA du registre sur
+   `nom@version:dist.integrity` avec la clé npm publiée ;
+3. télécharge l’attestation SLSA v1 annoncée par le registre ;
+4. vérifie cryptographiquement le bundle Sigstore, son certificat et son
+   inclusion dans le journal de transparence ;
+5. exige que le sujet Package URL et son digest SHA-512 correspondent au
+   composant verrouillé.
+
+Une simple présence de `dist.signatures`, `dist.attestations` ou d’un checksum
+Yarn ne produit donc jamais le statut « vérifié ». Le checksum de cache Yarn
+Berry reste affiché comme intégrité enregistrée, mais la preuve npm demeure
+« non vérifiable » lorsqu’aucun SRI de l’artefact n’est disponible.
+
+La vérification cryptographique ne suffit pas à décider quel dépôt est autorisé
+à publier. Pour imposer l’identité du workflow attendue, fournissez ensemble
+l’émetteur OIDC et une expression régulière URI ancrée :
+
+```bash
+npm run collect -- \
+  --provenance \
+  --provenance-issuer https://token.actions.githubusercontent.com \
+  --provenance-identity '^https://github\.com/ORG/REPO/.github/workflows/release\.yml@refs/tags/.+$'
+```
+
+Sans cette politique, une provenance valide est marquée comme
+cryptographiquement vérifiée mais l’audit signale concrètement que l’identité
+source n’est pas contrainte. Une signature invalide, un digest divergent ou une
+attestation Sigstore invalide produit un constat critique.
+
 ### Vulnérabilités connues avec OSV
 
-L’analyse OSV est explicite et ne concerne que les composants directs dont la
-version est exacte. La commande complète réalise le probe passif, interroge OSV
-et produit également le SBOM :
+L’analyse OSV est explicite et ne concerne que les composants dont la version
+est exacte. La commande complète réalise le probe passif, interroge OSV, vérifie
+la provenance npm et produit également le SBOM :
 
 ```bash
 npm run collect:security
@@ -266,7 +327,7 @@ et accepte les réponses JSON comme Server-Sent Events définies par le
 | Secrets | Jetons, mots de passe et clés présents en clair | Injection par variable d’environnement ou coffre de secrets |
 | Transport | URL HTTP et absence d’authentification visible | HTTPS et jeton court lié à l’audience |
 | Exécution | Shells intermédiaires et options désactivant la sécurité | Appel direct du binaire et sandbox active |
-| Supply chain | Paquets non verrouillés, images OCI mutables et avis OSV connus | Version exacte, digest SHA-256 ou version corrigée indiquée |
+| Supply chain | Paquets non verrouillés, images OCI mutables, avis OSV, signatures et provenance SLSA | Version exacte, digest SHA-256, version corrigée et identité de publication attendue |
 | Autorisations | Racines de disque, comptes administrateurs et portées larges | Chemin dédié, rôle en lecture seule et scopes minimaux |
 | Audit | Identité et corrélation insuffisantes | Identifiant de session et journalisation de métadonnées |
 
@@ -292,17 +353,21 @@ app/
 lib/
   audit-engine.ts  Règles, scoring et exports JSON/SARIF
   collector.ts     Découverte, redaction et probe MCP passif
-  lockfiles.ts     Lecture bornée et graphe transitif npm/Python
+  lockfiles.ts     Graphes package-lock, pnpm, Yarn, uv et Poetry
   osv.ts           Client OSV limité aux PURL versionnés
+  provenance.ts    Signatures npm et attestations SLSA/Sigstore
   supply-chain.ts  Détection des composants et export CycloneDX
+  workspaces.ts    Découverte bornée et sélection des packages monorepo
 tools/
   collector.ts     Interface en ligne de commande multiplateforme
 tests/
   audit-engine.test.ts     Tests de sécurité du moteur
   collector.test.ts        Tests du collecteur et du protocole passif
-  lockfiles.test.ts        Tests des graphes package-lock, uv et Poetry
+  lockfiles.test.ts        Tests des graphes npm, pnpm, Yarn, uv et Poetry
   osv.test.ts              Tests du client OSV et de ses limites réseau
+  provenance.test.ts       Tests ECDSA, digest SLSA et politique Sigstore
   supply-chain.test.ts     Tests npm, PyPI, OCI, PURL et CycloneDX
+  workspaces.test.ts       Tests de découverte et d’isolation des monorepos
   rendered-html.test.mjs   Tests du rendu de production
 public/
   og.png         Carte d’aperçu du projet
@@ -317,9 +382,11 @@ public/
 | `npm run start` | Lance la version construite |
 | `npm run collect` | Produit un inventaire local assaini |
 | `npm run collect:sbom` | Produit l’inventaire et le SBOM CycloneDX |
-| `npm run collect:security` | Ajoute le probe, l’analyse OSV et le SBOM |
+| `npm run collect:security` | Ajoute le probe, OSV, la provenance npm et le SBOM |
 | `npm run collect -- --probe` | Ajoute une négociation passive des endpoints HTTPS |
 | `npm run collect -- --osv` | Interroge OSV avec les seuls PURL versionnés |
+| `npm run collect -- --provenance` | Vérifie signatures npm et attestations SLSA/Sigstore |
+| `npm run collect -- --provenance-issuer <url> --provenance-identity <regexp>` | Contraint l’identité du workflow de publication |
 | `npm run collect -- --lockfile <fichier>` | Ajoute un lockfile explicite |
 | `npm run collect -- --no-lockfiles` | Désactive la découverte des lockfiles |
 | `npm run lint` | Vérifie les règles de qualité du code |
@@ -341,11 +408,13 @@ l’application et vérifie le HTML produit.
   donc pas leur comportement à l’exécution ;
 - le probe distant valide la négociation, pas les permissions effectives de
   chaque outil ;
-- les dépendances transitives sont résolues uniquement lorsqu’un composant
-  direct versionné correspond à `package-lock.json`, `npm-shrinkwrap.json`,
-  `uv.lock` ou `poetry.lock` ;
-- `pnpm-lock.yaml`, `yarn.lock`, les workspaces complexes et les dépendances
-  conditionnelles Python ne sont pas encore résolus ;
+- les résolutions Yarn ambiguës qui associent un même nom à plusieurs versions
+  ne sont pas devinées sans descripteur exact ;
+- les globs de workspace sont bornés à six niveaux et 250 manifests ;
+- les dépendances conditionnelles Python ne sont pas toutes résolues ;
+- la provenance en ligne couvre actuellement les paquets npm ; les images OCI
+  sont contrôlées par digest mais leurs signatures Cosign ne sont pas encore
+  interrogées ;
 - OSV peut ne pas disposer d’un avis ou d’une sévérité normalisée pour tous les
   écosystèmes ; le statut de l’analyse doit donc être vérifié dans l’inventaire ;
 - elle ne confirme pas les permissions effectives côté GitHub, base de données,
@@ -355,8 +424,7 @@ l’application et vérifie le HTML produit.
 
 ## Prochaines étapes possibles
 
-- prise en charge de `pnpm-lock.yaml`, `yarn.lock` et des workspaces monorepo ;
-- vérification de provenance des paquets et images (SLSA/signatures) ;
+- vérification Cosign/SLSA des images OCI et politiques d’identité par registre ;
 - gestion d’exceptions documentées et datées ;
 - export d’un rapport PDF ;
 - historique persistant et suivi des écarts dans le temps ;

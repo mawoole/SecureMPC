@@ -45,13 +45,25 @@ test("server-renders the MCP Sentinel application", async () => {
 });
 
 test("keeps the audit engine separate from the interface", async () => {
-  const [page, layout, auditEngine, supplyChain, lockfiles, osv, packageJson] = await Promise.all([
+  const [
+    page,
+    layout,
+    auditEngine,
+    supplyChain,
+    lockfiles,
+    osv,
+    provenance,
+    workspaces,
+    packageJson,
+  ] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/audit-engine.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/supply-chain.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/lockfiles.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/osv.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/provenance.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/workspaces.ts", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
@@ -64,6 +76,8 @@ test("keeps the audit engine separate from the interface", async () => {
   assert.match(lockfiles, /export async function analyzeLockfile/);
   assert.match(lockfiles, /export function enrichComponentsFromLockfiles/);
   assert.match(osv, /export async function scanComponentsWithOsv/);
+  assert.match(provenance, /export async function verifyComponentProvenance/);
+  assert.match(workspaces, /export async function discoverWorkspacePackages/);
   assert.match(page, /npm run collect:security/);
   assert.match(layout, /MCP Sentinel — Audit de sécurité MCP/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);

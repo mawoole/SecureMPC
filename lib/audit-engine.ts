@@ -3,6 +3,7 @@ import {
   type SupplyChainComponent,
 } from "./supply-chain.ts";
 import type { VulnerabilityScanSummary } from "./osv.ts";
+import type { ProvenanceScanSummary } from "./provenance.ts";
 
 export type Severity = "critical" | "high" | "medium";
 export type ServerStatus = "critical" | "attention" | "secure";
@@ -56,8 +57,10 @@ export type McpServer = {
     transitive: number;
     truncated: boolean;
     lockfiles: string[];
+    workspaces?: string[];
   };
   vulnerabilityScan?: VulnerabilityScanSummary;
+  provenanceScan?: ProvenanceScanSummary;
 };
 
 export type SecurityRule = {
@@ -172,6 +175,13 @@ export const SECURITY_RULES: SecurityRule[] = [
     title: "Vulnérabilités connues",
     detail:
       "Croise les composants versionnés avec les avis agrégés par OSV.dev.",
+    category: "Supply chain",
+  },
+  {
+    code: "MCP-SUP-03",
+    title: "Provenance et authenticité",
+    detail:
+      "Vérifie les signatures du registre, les attestations SLSA, leur journal Sigstore et le digest du sujet.",
     category: "Supply chain",
   },
 ];
@@ -425,6 +435,70 @@ function sanitizeImportedComponent(
     record.integrityStatus === "missing"
       ? record.integrityStatus
       : undefined;
+  const integrity = importedText(record.integrity, 1_024);
+  const workspace = importedText(record.workspace, 500);
+  const rawProvenance =
+    record.provenance &&
+    typeof record.provenance === "object" &&
+    !Array.isArray(record.provenance)
+      ? (record.provenance as Record<string, unknown>)
+      : undefined;
+  const verificationStates = [
+    "verified",
+    "missing",
+    "failed",
+    "unverifiable",
+    "error",
+    "not-applicable",
+  ];
+  const registrySignature = importedText(
+    rawProvenance?.registrySignature,
+    30,
+  );
+  const slsaProvenance = importedText(rawProvenance?.slsaProvenance, 30);
+  const subjectDigest = importedText(rawProvenance?.subjectDigest, 30);
+  const identityPolicy = importedText(rawProvenance?.identityPolicy, 30);
+  const provenanceMessage = importedText(rawProvenance?.message, 500);
+  const sourceRepository = importedText(
+    rawProvenance?.sourceRepository,
+    2_048,
+  );
+  const builderId = importedText(rawProvenance?.builderId, 2_048);
+  const checkedAt = importedText(rawProvenance?.checkedAt, 100);
+  const provenance =
+    rawProvenance?.provider === "npm-registry-sigstore" &&
+    registrySignature &&
+    slsaProvenance &&
+    verificationStates.includes(registrySignature) &&
+    verificationStates.includes(slsaProvenance) &&
+    ["matched", "mismatched", "unavailable"].includes(subjectDigest ?? "") &&
+    ["matched", "mismatched", "not-configured"].includes(
+      identityPolicy ?? "",
+    ) &&
+    provenanceMessage &&
+    checkedAt
+      ? {
+          provider: "npm-registry-sigstore" as const,
+          checkedAt,
+          registrySignature: registrySignature as NonNullable<
+            SupplyChainComponent["provenance"]
+          >["registrySignature"],
+          slsaProvenance: slsaProvenance as NonNullable<
+            SupplyChainComponent["provenance"]
+          >["slsaProvenance"],
+          subjectDigest: subjectDigest as NonNullable<
+            SupplyChainComponent["provenance"]
+          >["subjectDigest"],
+          identityPolicy: identityPolicy as NonNullable<
+            SupplyChainComponent["provenance"]
+          >["identityPolicy"],
+          ...(sourceRepository?.startsWith("https://")
+            ? { sourceRepository }
+            : {}),
+          ...(builderId?.startsWith("https://") ? { builderId } : {}),
+          message: provenanceMessage,
+        }
+      : undefined;
 
   return {
     id,
@@ -441,7 +515,49 @@ function sanitizeImportedComponent(
     dependencies,
     ...(lockfile ? { lockfile } : {}),
     ...(integrityStatus ? { integrityStatus } : {}),
+    ...(integrity && /^sha(?:256|384|512)-/.test(integrity)
+      ? { integrity }
+      : {}),
+    ...(workspace ? { workspace } : {}),
+    ...(provenance ? { provenance } : {}),
     vulnerabilities,
+  };
+}
+
+function sanitizeProvenanceScan(
+  value: unknown,
+): ProvenanceScanSummary | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const status = importedText(record.status, 20);
+  const checkedAt = importedText(record.checkedAt, 100);
+  const message = importedText(record.message, 500);
+  if (
+    record.provider !== "npm-registry-sigstore" ||
+    !["complete", "partial", "error"].includes(status ?? "") ||
+    !checkedAt ||
+    !message
+  ) {
+    return undefined;
+  }
+  const count = (candidate: unknown) =>
+    typeof candidate === "number" &&
+    Number.isSafeInteger(candidate) &&
+    candidate >= 0
+      ? candidate
+      : 0;
+  return {
+    provider: "npm-registry-sigstore",
+    status: status as ProvenanceScanSummary["status"],
+    checkedAt,
+    packages: count(record.packages),
+    registrySignaturesVerified: count(record.registrySignaturesVerified),
+    slsaProvenanceVerified: count(record.slsaProvenanceVerified),
+    missing: count(record.missing),
+    failed: count(record.failed),
+    message,
   };
 }
 
@@ -546,6 +662,9 @@ export function auditConfiguration(raw: string): McpServer[] {
     const vulnerabilityScan = sanitizeVulnerabilityScan(
       parsedRecord.vulnerabilityScan,
     );
+    const provenanceScan = sanitizeProvenanceScan(
+      parsedRecord.provenanceScan,
+    );
 
     return (parsedRecord.servers as unknown[]).map((entry, index) => {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
@@ -609,6 +728,13 @@ export function auditConfiguration(raw: string): McpServer[] {
               ...new Set(
                 components.flatMap((component) =>
                   component.lockfile ? [component.lockfile] : [],
+                ),
+              ),
+            ],
+            workspaces: [
+              ...new Set(
+                components.flatMap((component) =>
+                  component.workspace ? [component.workspace] : [],
                 ),
               ),
             ],
@@ -693,6 +819,87 @@ export function auditConfiguration(raw: string): McpServer[] {
         }
       }
 
+      const provenanceComponents = (components ?? []).filter(
+        (component) => component.provenance,
+      );
+      const failedProvenance = provenanceComponents.filter(
+        (component) =>
+          component.provenance?.registrySignature === "failed" ||
+          component.provenance?.slsaProvenance === "failed",
+      );
+      const missingProvenance = provenanceComponents.filter(
+        (component) =>
+          component.scope !== "transitive" &&
+          (["missing", "unverifiable"].includes(
+            component.provenance?.registrySignature ?? "",
+          ) ||
+            ["missing", "unverifiable"].includes(
+              component.provenance?.slsaProvenance ?? "",
+            )),
+      );
+      const provenanceErrors = provenanceComponents.filter(
+        (component) =>
+          component.provenance?.registrySignature === "error" ||
+          component.provenance?.slsaProvenance === "error",
+      );
+      const policyMissing = provenanceComponents.filter(
+        (component) =>
+          component.provenance?.slsaProvenance === "verified" &&
+          component.provenance.identityPolicy === "not-configured",
+      );
+      if (failedProvenance.length) {
+        findings.push(
+          makeFinding(
+            `collected-${index}-${slugify(name)}-provenance-failed`,
+            "critical",
+            "Preuve de provenance invalide",
+            `${failedProvenance.length} composant${failedProvenance.length > 1 ? "s ont" : " a"} une signature invalide, un digest divergent ou une attestation Sigstore non vérifiable : ${failedProvenance.slice(0, 3).map((component) => component.name).join(", ")}.`,
+            "Bloquez la mise en service, régénérez le lockfile depuis une source de confiance et vérifiez le paquet, la version, le digest ainsi que l’identité du workflow de publication.",
+            "npm run collect -- --provenance --provenance-issuer https://token.actions.githubusercontent.com --provenance-identity '^https://github\\.com/ORG/REPO/.github/workflows/release\\.yml@refs/tags/.+$'",
+            "MCP-SUP-03",
+          ),
+        );
+      }
+      if (missingProvenance.length) {
+        findings.push(
+          makeFinding(
+            `collected-${index}-${slugify(name)}-provenance-missing`,
+            "medium",
+            "Provenance incomplète",
+            `${missingProvenance.length} composant direct n’a pas de signature ou de provenance SLSA vérifiable : ${missingProvenance.slice(0, 3).map((component) => component.name).join(", ")}.`,
+            "Préférez une version publiée avec provenance npm, conservez son intégrité SRI dans le lockfile et relancez le collecteur avec --provenance.",
+            "npm run collect -- --provenance",
+            "MCP-SUP-03",
+          ),
+        );
+      }
+      if (provenanceErrors.length) {
+        findings.push(
+          makeFinding(
+            `collected-${index}-${slugify(name)}-provenance-error`,
+            "medium",
+            "Vérification de provenance indisponible",
+            `La vérification réseau ou le matériel de confiance Sigstore a échoué pour ${provenanceErrors.length} composant${provenanceErrors.length > 1 ? "s" : ""}.`,
+            "Vérifiez l’accès HTTPS au registre npm et aux services de confiance Sigstore, puis relancez exactement le même inventaire.",
+            "npm run collect -- --provenance",
+            "MCP-SUP-03",
+          ),
+        );
+      }
+      if (policyMissing.length) {
+        findings.push(
+          makeFinding(
+            `collected-${index}-${slugify(name)}-provenance-policy`,
+            "medium",
+            "Identité source non contrainte",
+            `La preuve cryptographique est valide pour ${policyMissing.length} composant${policyMissing.length > 1 ? "s" : ""}, mais aucune identité de dépôt ou de workflow attendue n’a été imposée.`,
+            "Ajoutez l’émetteur OIDC et une expression régulière ancrée pour l’identité du workflow de publication attendu.",
+            "npm run collect -- --provenance --provenance-issuer https://token.actions.githubusercontent.com --provenance-identity '^https://github\\.com/ORG/REPO/.github/workflows/release\\.yml@refs/tags/.+$'",
+            "MCP-SUP-03",
+          ),
+        );
+      }
+
       const probe =
         collected.probe &&
         typeof collected.probe === "object" &&
@@ -757,6 +964,7 @@ export function auditConfiguration(raw: string): McpServer[] {
         components,
         componentGraph,
         vulnerabilityScan,
+        provenanceScan,
       };
     });
   }
@@ -971,10 +1179,16 @@ function cloneForReport(server: McpServer): McpServer {
     vulnerabilityScan: server.vulnerabilityScan
       ? { ...server.vulnerabilityScan }
       : undefined,
+    provenanceScan: server.provenanceScan
+      ? { ...server.provenanceScan }
+      : undefined,
     componentGraph: server.componentGraph
       ? {
           ...server.componentGraph,
           lockfiles: [...server.componentGraph.lockfiles],
+          workspaces: server.componentGraph.workspaces
+            ? [...server.componentGraph.workspaces]
+            : undefined,
         }
       : undefined,
   };

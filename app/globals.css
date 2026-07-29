@@ -1822,7 +1822,7 @@ button.table-row:hover {
   font-size: 11px;
 }
 
-.supply-chain-heading > span {
+.supply-chain-placeholder {
   align-items: center;
   background: var(--cobalt-soft);
   border-radius: 7px;
@@ -1834,27 +1834,37 @@ button.table-row:hover {
   width: 27px;
 }
 
-.supply-chain-heading > .osv-status {
+.supply-chain-heading > .supply-chain-statuses {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: row;
+  gap: 5px;
+}
+
+.osv-status,
+.provenance-status {
+  border-radius: 7px;
   font-size: 7px;
   font-weight: 760;
-  height: auto;
   letter-spacing: 0.04em;
   padding: 6px 8px;
   text-transform: uppercase;
-  width: auto;
 }
 
-.supply-chain-heading > .osv-status.complete {
+.osv-status.complete,
+.provenance-status.complete {
   background: var(--green-soft);
   color: var(--green);
 }
 
-.supply-chain-heading > .osv-status.partial {
+.osv-status.partial,
+.provenance-status.partial {
   background: var(--amber-soft);
   color: #93671e;
 }
 
-.supply-chain-heading > .osv-status.error {
+.osv-status.error,
+.provenance-status.error {
   background: var(--coral-soft);
   color: var(--coral);
 }
@@ -1939,6 +1949,19 @@ button.table-row:hover {
   color: var(--cobalt);
 }
 
+.component-workspace {
+  background: #f0e9fb;
+  border-radius: 999px;
+  color: #68429b;
+  font-size: 6px;
+  font-weight: 720;
+  max-width: 160px;
+  overflow: hidden;
+  padding: 2px 5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .component-list-limit {
   border-top: 1px solid var(--line);
   color: var(--muted);
@@ -1980,6 +2003,34 @@ button.table-row:hover {
   font-size: 7px;
   font-weight: 760;
   padding: 4px 7px;
+}
+
+.component-provenance {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 7px;
+  font-weight: 760;
+  padding: 4px 7px;
+  text-transform: uppercase;
+}
+
+.component-provenance.verified {
+  background: var(--green-soft);
+  border-color: #bbddcd;
+  color: var(--green);
+}
+
+.component-provenance.partial {
+  background: var(--amber-soft);
+  border-color: #ead6a4;
+  color: #93671e;
+}
+
+.component-provenance.failed,
+.component-provenance.error {
+  background: var(--coral-soft);
+  border-color: #f1c2ba;
+  color: var(--coral);
 }
 
 .probe-card {
