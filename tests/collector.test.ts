@@ -16,7 +16,11 @@ test("discovers the common MCP configuration paths on every platform", () => {
   const windows = discoverCandidateFiles({
     platform: "win32",
     home: "C:\\Users\\alice",
-    environment: { APPDATA: "C:\\Users\\alice\\AppData\\Roaming" },
+    environment: {
+      APPDATA: "C:\\Users\\alice\\AppData\\Roaming",
+      LOCALAPPDATA: "C:\\Users\\alice\\AppData\\Local",
+      ProgramFiles: "C:\\Program Files",
+    },
     workspace: "C:\\work\\project",
   });
   const mac = discoverCandidateFiles({
@@ -46,6 +50,38 @@ test("discovers the common MCP configuration paths on every platform", () => {
     ),
   );
   assert.ok(
+    windows.some(
+      (candidate) =>
+        candidate.client === "Claude Code" &&
+        candidate.layout === "claude-code" &&
+        candidate.path === "C:\\Users\\alice\\.claude.json",
+    ),
+  );
+  assert.ok(
+    windows.some(
+      (candidate) =>
+        candidate.client === "Claude Code (projet)" &&
+        candidate.path === "C:\\work\\project\\.mcp.json",
+    ),
+  );
+  assert.ok(
+    windows.some(
+      (candidate) =>
+        candidate.client === "Claude Desktop (Microsoft Store)" &&
+        candidate.path.endsWith(
+          "Packages\\Claude_pzs8sxrjxfjjc\\LocalCache\\Roaming\\Claude\\claude_desktop_config.json",
+        ),
+    ),
+  );
+  assert.ok(
+    windows.some(
+      (candidate) =>
+        candidate.client === "Claude Code (administré)" &&
+        candidate.path ===
+          "C:\\Program Files\\ClaudeCode\\managed-mcp.json",
+    ),
+  );
+  assert.ok(
     mac.some(
       (candidate) =>
         candidate.client === "Codex" &&
@@ -69,6 +105,21 @@ test("discovers the common MCP configuration paths on every platform", () => {
   assert.ok(
     linux.some((candidate) =>
       candidate.path.endsWith("Code/User/mcp.json"),
+    ),
+  );
+  assert.ok(
+    mac.some(
+      (candidate) =>
+        candidate.client === "Claude Code (administré)" &&
+        candidate.path ===
+          "/Library/Application Support/ClaudeCode/managed-mcp.json",
+    ),
+  );
+  assert.ok(
+    linux.some(
+      (candidate) =>
+        candidate.client === "Claude Code (administré)" &&
+        candidate.path === "/etc/claude-code/managed-mcp.json",
     ),
   );
   assert.ok(
@@ -204,6 +255,116 @@ test("collects Codex TOML servers and redacts nested secrets", async () => {
     );
     assert.doesNotMatch(serialized, new RegExp(secret));
     assert.match(serialized, /\$\{REDACTED\}/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("collects Claude Code user and local project scopes", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mcp-sentinel-claude-"));
+  const configPath = join(directory, ".claude.json");
+  const secret = "claude-secret-that-must-not-leak";
+
+  try {
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          shared: {
+            command: "npx",
+            args: ["-y", "@acme/shared-mcp@1.2.3"],
+            env: { API_TOKEN: secret },
+          },
+        },
+        projects: {
+          "/work/private-project-one": {
+            mcpServers: {
+              shared: {
+                url: "https://mcp.example.test/tenant-alpha",
+                headers: { Authorization: `Bearer ${secret}` },
+              },
+            },
+          },
+          "/work/private-project-two": {
+            mcpServers: {
+              projectOnly: {
+                command: "uvx",
+                args: ["project-mcp==2.3.4"],
+              },
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const inventory = await collectInventory({
+      candidates: [],
+      additionalPaths: [configPath],
+      home: directory,
+      platform: "linux",
+      scanLockfiles: false,
+      now: () => new Date("2026-07-30T12:00:00.000Z"),
+    });
+    const serialized = JSON.stringify(inventory);
+
+    assert.equal(inventory.sources[0].status, "read");
+    assert.equal(inventory.sources[0].servers, 3);
+    assert.equal(inventory.servers.length, 3);
+    assert.equal(new Set(inventory.servers.map((server) => server.id)).size, 3);
+    assert.equal(
+      inventory.servers.filter((server) =>
+        server.source.client.endsWith("(utilisateur)"),
+      ).length,
+      1,
+    );
+    assert.equal(
+      inventory.servers.filter((server) =>
+        server.source.client.endsWith("(projet local)"),
+      ).length,
+      2,
+    );
+    assert.doesNotMatch(
+      serialized,
+      /private-project-one|private-project-two/,
+    );
+    assert.doesNotMatch(serialized, new RegExp(secret));
+    assert.match(serialized, /\$\{REDACTED\}/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("accepts a Claude Code state file without configured MCP servers", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mcp-sentinel-claude-empty-"));
+  const configPath = join(directory, ".claude.json");
+
+  try {
+    await writeFile(
+      configPath,
+      JSON.stringify({ projects: { "/work/project": { trusted: true } } }),
+      "utf8",
+    );
+    const inventory = await collectInventory({
+      candidates: [
+        {
+          client: "Claude Code",
+          path: configPath,
+          layout: "claude-code",
+        },
+      ],
+      home: directory,
+      platform: "linux",
+      scanLockfiles: false,
+    });
+
+    assert.equal(inventory.servers.length, 0);
+    assert.equal(inventory.sources[0].status, "read");
+    assert.equal(inventory.sources[0].servers, 0);
+    assert.match(
+      inventory.sources[0].message ?? "",
+      /portées utilisateur ou locales/,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -115,6 +115,8 @@ test("keeps the audit engine separate from the interface", async () => {
   assert.match(pdfReport, /export function createAuditPdfReport/);
   assert.match(workspaces, /export async function discoverWorkspacePackages/);
   assert.match(page, /npm run collect:security/);
+  assert.match(page, /Claude Desktop classique ou Microsoft/);
+  assert.match(page, /<code>\.mcp\.json<\/code>/);
   assert.match(packageJson, /generate:admission/);
   assert.match(packageJson, /validate:admission/);
   assert.match(ciWorkflow, /Generate Kubernetes admission bundle/);
