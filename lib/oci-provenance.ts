@@ -140,7 +140,7 @@ export function validateOciVerificationPolicy(
   }
 }
 
-function normalizedImagePrefix(value: string): string {
+export function normalizeOciImagePrefix(value: string): string {
   const prefix = value
     .trim()
     .replace(/^docker:\/\//i, "")
@@ -202,7 +202,7 @@ export function validateOciVerificationRules(
       throw new Error(`Identifiant de politique OCI dupliqué : ${policy.id}.`);
     }
     identifiers.add(identifier);
-    const prefix = normalizedImagePrefix(policy.imagePrefix);
+    const prefix = normalizeOciImagePrefix(policy.imagePrefix);
     if (prefixes.has(prefix)) {
       throw new Error(`Préfixe de politique OCI dupliqué : ${prefix}.`);
     }
@@ -753,7 +753,7 @@ export async function verifyOciProvenance(
   const resolvedPolicies = (options.policies ?? [])
     .map((policy) => ({
       policy,
-      prefix: normalizedImagePrefix(policy.imagePrefix),
+      prefix: normalizeOciImagePrefix(policy.imagePrefix),
     }))
     .sort((left, right) => right.prefix.length - left.prefix.length);
   const selectPolicy = (component: SupplyChainComponent) =>

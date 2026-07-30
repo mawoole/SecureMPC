@@ -51,6 +51,7 @@ test("keeps the audit engine separate from the interface", async () => {
     auditEngine,
     supplyChain,
     lockfiles,
+    kubernetesAdmission,
     ociProvenance,
     osv,
     provenance,
@@ -62,6 +63,10 @@ test("keeps the audit engine separate from the interface", async () => {
     readFile(new URL("../lib/audit-engine.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/supply-chain.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/lockfiles.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../lib/kubernetes-admission.ts", import.meta.url),
+      "utf8",
+    ),
     readFile(new URL("../lib/oci-provenance.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/osv.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/provenance.ts", import.meta.url), "utf8"),
@@ -77,6 +82,10 @@ test("keeps the audit engine separate from the interface", async () => {
   assert.match(supplyChain, /export function createCycloneDxReport/);
   assert.match(lockfiles, /export async function analyzeLockfile/);
   assert.match(lockfiles, /export function enrichComponentsFromLockfiles/);
+  assert.match(
+    kubernetesAdmission,
+    /export function generateKubernetesAdmissionBundle/,
+  );
   assert.match(ociProvenance, /export async function verifyOciProvenance/);
   assert.match(
     ociProvenance,
@@ -87,6 +96,7 @@ test("keeps the audit engine separate from the interface", async () => {
   assert.match(provenance, /export async function verifyComponentProvenance/);
   assert.match(workspaces, /export async function discoverWorkspacePackages/);
   assert.match(page, /npm run collect:security/);
+  assert.match(packageJson, /generate:admission/);
   assert.match(layout, /MCP Sentinel — Audit de sécurité MCP/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   let previewFiles = [];

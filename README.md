@@ -31,6 +31,8 @@ directement applicables.
   avec Sigstore ;
 - vérification des signatures Cosign et des attestations SLSA d’images OCI
   verrouillées par digest, avec plusieurs politiques sélectionnées par préfixe ;
+- génération hors ligne de politiques d’admission Kubernetes Sigstore à partir
+  des mêmes identités OCI ;
 - recherche optionnelle des vulnérabilités connues via OSV.dev ;
 - prise en charge des objets `mcpServers` utilisés par Claude Desktop, Cursor
   et VS Code ;
@@ -74,6 +76,8 @@ par un collecteur local explicite :
 - la vérification OCI lance uniquement `cosign verify`,
   `cosign verify-attestation` ou `gh attestation verify` avec une liste
   d’arguments fixe ; aucun shell, conteneur ou serveur MCP n’est exécuté ;
+- le générateur Kubernetes écrit uniquement des manifestes et valeurs Helm :
+  il ne lance ni `kubectl` ni Helm et ne contacte aucun cluster ;
 - les données de démonstration peuvent être restaurées à tout moment.
 
 Même avec ces protections, évitez de partager ou de committer une configuration
@@ -352,6 +356,44 @@ confiance choisi. Pour un registre privé, `cosign` ou `gh` peut réutiliser ses
 propres identifiants déjà configurés ; MCP Sentinel ne lit ni ne conserve ces
 identifiants.
 
+### Admission Kubernetes
+
+Le même fichier de politiques peut produire un dossier d’admission Kubernetes
+sans contacter le cluster :
+
+```bash
+npm run generate:admission -- \
+  --policy-file ./examples/oci-policies.json \
+  --namespace production \
+  --output ./kubernetes-admission
+```
+
+`--namespace` est répétable et obligatoire afin qu’aucun périmètre
+d’application ne soit supposé. Le dossier est nouveau : le générateur refuse
+de l’écraser. Il contient :
+
+- deux `ClusterImagePolicy` par règle Cosign, car Sigstore cumule les politiques
+  correspondantes : l’une exige la signature, l’autre la provenance SLSA v1 ;
+- un fichier de valeurs Helm par règle GitHub, avec l’organisation et le dépôt
+  exacts pour le chart officiel `trust-policies` ;
+- `namespaces.yaml`, qui active explicitement
+  `policy.sigstore.dev/include: "true"` ;
+- un README ordonné avec installation, `--dry-run=server`, application et
+  configuration explicite de `no-match-policy: deny`.
+
+Le générateur rejette les préfixes imbriqués. Le vérificateur local sait choisir
+la règle la plus spécifique, mais Kubernetes impose toutes les
+`ClusterImagePolicy` qui correspondent à une image ; accepter silencieusement
+un chevauchement changerait donc la sémantique de sécurité. Utilisez des
+préfixes disjoints ou une identité commune avant la génération.
+Les expressions d’identité incompatibles avec le moteur RE2/Go de Kubernetes,
+comme les références arrière et anticipations, sont également refusées.
+
+Le bundle ne doit pas être appliqué directement en production. Relisez les
+identités, testez d’abord les commandes `kubectl --dry-run=server` générées,
+activez un namespace de préproduction puis vérifiez qu’une image non conforme
+est bien refusée.
+
 ### Vulnérabilités connues avec OSV
 
 L’analyse OSV est explicite et ne concerne que les composants dont la version
@@ -428,6 +470,7 @@ lib/
   audit-engine.ts  Règles, scoring et exports JSON/SARIF
   collector.ts     Découverte, redaction et probe MCP passif
   lockfiles.ts     Graphes package-lock, pnpm, Yarn, uv et Poetry
+  kubernetes-admission.ts Génération sûre des politiques d’admission
   oci-provenance.ts Vérification OCI bornée via Cosign ou GitHub
   osv.ts           Client OSV limité aux PURL versionnés
   provenance.ts    Signatures npm et attestations SLSA/Sigstore
@@ -436,10 +479,12 @@ lib/
 examples/
   oci-policies.json Exemple de routage OCI GitHub/Cosign par préfixe
 tools/
+  admission.ts     Générateur de bundle Kubernetes sans accès au cluster
   collector.ts     Interface en ligne de commande multiplateforme
 tests/
   audit-engine.test.ts     Tests de sécurité du moteur
   collector.test.ts        Tests du collecteur et du protocole passif
+  kubernetes-admission.test.ts Tests YAML, identités et préfixes Kubernetes
   lockfiles.test.ts        Tests des graphes npm, pnpm, Yarn, uv et Poetry
   oci-provenance.test.ts    Tests Cosign/GitHub, identité et digests OCI
   osv.test.ts              Tests du client OSV et de ses limites réseau
@@ -468,6 +513,7 @@ public/
 | `npm run collect -- --oci-cosign --oci-issuer <url> --oci-identity <regexp>` | Vérifie signature Cosign et provenance SLSA OCI |
 | `npm run collect -- --oci-github-repo <owner/repo>` | Vérifie une attestation OCI GitHub liée au dépôt attendu |
 | `npm run collect -- --oci-policy-file <fichier>` | Applique plusieurs politiques OCI par préfixe, sans fallback implicite |
+| `npm run generate:admission -- --policy-file <fichier> --namespace <nom>` | Génère un bundle Kubernetes Sigstore sans contacter le cluster |
 | `npm run collect -- --lockfile <fichier>` | Ajoute un lockfile explicite |
 | `npm run collect -- --no-lockfiles` | Désactive la découverte des lockfiles |
 | `npm run lint` | Vérifie les règles de qualité du code |
@@ -495,6 +541,10 @@ l’application et vérifie le HTML produit.
 - les dépendances conditionnelles Python ne sont pas toutes résolues ;
 - les fichiers OCI sont limités à 50 politiques et utilisent des préfixes
   explicites plutôt que des motifs glob complexes ;
+- le générateur d’admission refuse les préfixes imbriqués et ne remplace pas
+  une validation `kubectl --dry-run=server` contre les CRD réellement installées ;
+- les versions de charts inscrites dans le bundle sont épinglées et doivent être
+  réévaluées lors d’une mise à niveau de Policy Controller ;
 - la voie Cosign requiert un binaire `cosign` installé localement et la voie
   GitHub requiert la CLI `gh` ;
 - OSV peut ne pas disposer d’un avis ou d’une sévérité normalisée pour tous les
@@ -506,8 +556,8 @@ l’application et vérifie le HTML produit.
 
 ## Prochaines étapes possibles
 
-- génération de politiques d’admission Kubernetes à partir des règles OCI ;
 - gestion d’exceptions documentées et datées ;
+- validation CI des bundles Kubernetes générés ;
 - export d’un rapport PDF ;
 - historique persistant et suivi des écarts dans le temps ;
 - intégration CI pour bloquer les configurations à haut risque.
