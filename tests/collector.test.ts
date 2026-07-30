@@ -38,6 +38,28 @@ test("discovers the common MCP configuration paths on every platform", () => {
     ),
   );
   assert.ok(
+    windows.some(
+      (candidate) =>
+        candidate.client === "Codex" &&
+        candidate.format === "toml" &&
+        candidate.path === "C:\\Users\\alice\\.codex\\config.toml",
+    ),
+  );
+  assert.ok(
+    mac.some(
+      (candidate) =>
+        candidate.client === "Codex" &&
+        candidate.path === "/Users/alice/.codex/config.toml",
+    ),
+  );
+  assert.ok(
+    linux.some(
+      (candidate) =>
+        candidate.client === "Codex" &&
+        candidate.path === "/home/alice/.codex/config.toml",
+    ),
+  );
+  assert.ok(
     mac.some((candidate) =>
       candidate.path.endsWith(
         "Library/Application Support/Claude/claude_desktop_config.json",
@@ -126,6 +148,89 @@ test("collects supported containers without retaining source secrets", async () 
       "00000000-0000-4000-8000-000000000002",
     );
     assert.doesNotMatch(JSON.stringify(sbom), new RegExp(secret));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("collects Codex TOML servers and redacts nested secrets", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mcp-sentinel-codex-"));
+  const configPath = join(directory, "config.toml");
+  const secret = "codex-secret-that-must-not-leak";
+
+  try {
+    await writeFile(
+      configPath,
+      [
+        'model = "gpt-5"',
+        "",
+        "[mcp_servers.node_repl]",
+        'command = "node"',
+        'args = ["server.mjs"]',
+        "",
+        "[mcp_servers.node_repl.env]",
+        `MCP_ACCESS_TOKEN = "${secret}"`,
+        "",
+        '[mcp_servers."remote.docs"]',
+        'url = "https://mcp.example.test/v1"',
+        "",
+        '[mcp_servers."remote.docs".http_headers]',
+        `Authorization = "Bearer ${secret}"`,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const inventory = await collectInventory({
+      candidates: [],
+      additionalPaths: [configPath],
+      home: directory,
+      platform: "linux",
+      scanLockfiles: false,
+      now: () => new Date("2026-07-30T12:00:00.000Z"),
+    });
+    const serialized = JSON.stringify(inventory);
+
+    assert.equal(inventory.servers.length, 2);
+    assert.equal(inventory.sources[0].status, "read");
+    assert.equal(inventory.sources[0].servers, 2);
+    assert.equal(inventory.servers[0].name, "node_repl");
+    assert.equal(inventory.servers[1].name, "remote.docs");
+    assert.equal(inventory.servers[0].configuration.command, "node");
+    assert.equal(
+      (
+        inventory.servers[0].configuration.env as Record<string, unknown>
+      ).MCP_ACCESS_TOKEN,
+      "${REDACTED}",
+    );
+    assert.doesNotMatch(serialized, new RegExp(secret));
+    assert.match(serialized, /\$\{REDACTED\}/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("reports invalid TOML sources without exposing their contents", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mcp-sentinel-toml-"));
+  const configPath = join(directory, "config.toml");
+  const secret = "invalid-toml-content-must-not-leak";
+
+  try {
+    await writeFile(
+      configPath,
+      `[mcp_servers.broken\ncredential = '${secret}'`,
+      "utf8",
+    );
+    const inventory = await collectInventory({
+      candidates: [{ client: "Codex", path: configPath, format: "toml" }],
+      home: directory,
+      platform: "linux",
+      scanLockfiles: false,
+    });
+
+    assert.equal(inventory.servers.length, 0);
+    assert.equal(inventory.sources[0].status, "invalid");
+    assert.equal(inventory.sources[0].message, "TOML invalide.");
+    assert.doesNotMatch(JSON.stringify(inventory), new RegExp(secret));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

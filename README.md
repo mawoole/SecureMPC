@@ -35,8 +35,8 @@ directement applicables.
   des mêmes identités OCI ;
 - validation CI déterministe des bundles Kubernetes générés ;
 - recherche optionnelle des vulnérabilités connues via OSV.dev ;
-- prise en charge des objets `mcpServers` utilisés par Claude Desktop, Cursor
-  et VS Code ;
+- prise en charge des objets JSON `mcpServers` utilisés par Claude Desktop,
+  Cursor et VS Code, ainsi que des tables TOML `mcp_servers` de Codex ;
 - détection locale des secrets présents en clair ;
 - contrôle du chiffrement des transports distants ;
 - détection des shells intermédiaires et options dangereuses ;
@@ -188,7 +188,8 @@ npm run collect
 Le fichier `mcp-inventory.json` est produit dans le dossier courant. Ouvrez
 ensuite **Découvrir** dans l’application et importez ce fichier. L’inventaire
 local est ignoré par Git afin d’éviter de publier des métadonnées
-d’infrastructure.
+d’infrastructure. Le collecteur détecte automatiquement la configuration Codex
+`~/.codex/config.toml` et ses tables `[mcp_servers.<nom>]`.
 
 Pour vérifier également les endpoints MCP distants :
 
@@ -207,6 +208,9 @@ Options utiles :
 ```bash
 # Ajouter un fichier non standard
 npm run collect -- --path ./config/mcp.json
+
+# Ajouter explicitement une configuration Codex TOML
+npm run collect -- --path ~/.codex/config.toml
 
 # Limiter la recherche workspace à un autre projet
 npm run collect -- --workspace ../autre-projet
@@ -480,6 +484,7 @@ commande se termine avec le code `2`.
 
 | Client | Windows | macOS | Linux |
 | --- | --- | --- | --- |
+| Codex | `%USERPROFILE%\.codex\config.toml` | `~/.codex/config.toml` | `~/.codex/config.toml` |
 | Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` | `~/Library/Application Support/Claude/claude_desktop_config.json` | `~/.config/Claude/claude_desktop_config.json` |
 | Cursor | `~/.cursor/mcp.json` | `~/.cursor/mcp.json` | `~/.cursor/mcp.json` |
 | VS Code | `%APPDATA%\Code\User\mcp.json` | `~/Library/Application Support/Code/User/mcp.json` | `~/.config/Code/User/mcp.json` |
@@ -487,8 +492,11 @@ commande se termine avec le code `2`.
 | Workspace | `.vscode/mcp.json`, `.cursor/mcp.json` | idem | idem |
 
 Les fichiers `settings.json` de VS Code sont aussi inspectés lorsque présents.
-Les chemins personnels sont normalisés avec `~` dans l’inventaire. Sous macOS
-et Linux, le fichier produit reçoit des permissions `0600`.
+Les sous-tables Codex, notamment `[mcp_servers.<nom>.env]` et
+`[mcp_servers.<nom>.http_headers]`, sont rattachées au serveur puis assainies
+comme les objets JSON. Les chemins personnels sont normalisés avec `~` dans
+l’inventaire. Sous macOS et Linux, le fichier produit reçoit des permissions
+`0600`.
 
 Le probe suit la version stable `2025-11-25` de la
 [spécification MCP](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)
