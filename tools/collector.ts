@@ -4,6 +4,7 @@ import { chmod, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { collectInventory } from "../lib/collector.ts";
 import { scanComponentsWithOsv } from "../lib/osv.ts";
+import type { ProvenancePolicy } from "../lib/provenance.ts";
 import { createCycloneDxReport } from "../lib/supply-chain.ts";
 
 type CliOptions = {
@@ -12,10 +13,14 @@ type CliOptions = {
   output: string;
   osv: boolean;
   probe: boolean;
+  provenanceIdentity?: string;
+  provenanceIssuer?: string;
+  provenancePolicy?: ProvenancePolicy;
   scanLockfiles: boolean;
   sbomOutput?: string;
   stdout: boolean;
   timeoutMs: number;
+  verifyProvenance: boolean;
   workspace?: string;
 };
 
@@ -33,10 +38,15 @@ Usage:
 Options:
   --path <fichier>       Ajoute un fichier de configuration explicite (répétable)
   --workspace <dossier>  Dossier où rechercher .vscode/mcp.json et .cursor/mcp.json
-  --lockfile <fichier>    Ajoute un package-lock.json, uv.lock ou poetry.lock
+  --lockfile <fichier>    Ajoute un lockfile npm, pnpm, Yarn, uv ou Poetry
   --no-lockfiles          Désactive la découverte des lockfiles du workspace
   --probe                Vérifie passivement les endpoints HTTPS distants
   --osv                  Interroge OSV.dev avec les PURL versionnés uniquement
+  --provenance           Vérifie signatures npm et attestations SLSA/Sigstore
+  --provenance-issuer <url>
+                         Exige cet émetteur de certificat Sigstore
+  --provenance-identity <regexp>
+                         Exige cette identité URI dans le certificat Sigstore
   --sbom [fichier]       Produit aussi un SBOM CycloneDX 1.7
   --timeout <ms>         Délai du probe, entre 500 et 15000 ms (défaut : 5000)
   --output <fichier>     Fichier produit (défaut : mcp-inventory.json)
@@ -45,9 +55,10 @@ Options:
 
 Garanties du collecteur :
   - les secrets concrets sont remplacés avant l’écriture ;
-  - les lockfiles sont lus sans exécuter npm, uv, Poetry ou un serveur MCP ;
+  - les lockfiles sont lus sans exécuter npm, pnpm, Yarn, uv, Poetry ou un serveur MCP ;
   - aucun en-tête d’authentification découvert n’est envoyé ;
   - avec --osv, seuls les PURL versionnés sont envoyés à OSV.dev ;
+  - avec --provenance, seuls nom, version et digest sont rapprochés du registre npm ;
   - aucun serveur stdio ni outil MCP n’est exécuté.`;
 }
 
@@ -69,6 +80,7 @@ function parseArguments(args: string[]): CliOptions {
     scanLockfiles: true,
     stdout: false,
     timeoutMs: 5_000,
+    verifyProvenance: false,
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -87,6 +99,22 @@ function parseArguments(args: string[]): CliOptions {
     }
     if (argument === "--osv") {
       options.osv = true;
+      continue;
+    }
+    if (argument === "--provenance") {
+      options.verifyProvenance = true;
+      continue;
+    }
+    if (argument === "--provenance-issuer") {
+      options.provenanceIssuer = readValue(args, index, argument);
+      options.verifyProvenance = true;
+      index += 1;
+      continue;
+    }
+    if (argument === "--provenance-identity") {
+      options.provenanceIdentity = readValue(args, index, argument);
+      options.verifyProvenance = true;
+      index += 1;
       continue;
     }
     if (argument === "--stdout") {
@@ -142,6 +170,28 @@ function parseArguments(args: string[]): CliOptions {
     throw new Error(`Option inconnue : ${argument}`);
   }
 
+  if (Boolean(options.provenanceIssuer) !== Boolean(options.provenanceIdentity)) {
+    throw new Error(
+      "--provenance-issuer et --provenance-identity doivent être fournis ensemble.",
+    );
+  }
+  if (options.provenanceIssuer && options.provenanceIdentity) {
+    const issuer = new URL(options.provenanceIssuer);
+    if (issuer.protocol !== "https:") {
+      throw new Error("--provenance-issuer doit être une URL HTTPS.");
+    }
+    try {
+      new RegExp(options.provenanceIdentity);
+    } catch {
+      throw new Error(
+        "--provenance-identity doit être une expression régulière valide.",
+      );
+    }
+    options.provenancePolicy = {
+      certificateIssuer: options.provenanceIssuer,
+      certificateIdentityURI: options.provenanceIdentity,
+    };
+  }
   return options;
 }
 
@@ -229,6 +279,7 @@ async function main() {
     (total, server) => total + (server.componentGraph?.transitive ?? 0),
     0,
   );
+  const provenance = inventory.provenanceScan;
   process.stderr.write(
     [
       `${discovered} serveur${discovered > 1 ? "s" : ""} découvert${discovered > 1 ? "s" : ""}.`,
@@ -242,6 +293,9 @@ async function main() {
       options.scanLockfiles || options.lockfilePaths.length
         ? `${lockfiles} lockfile${lockfiles > 1 ? "s" : ""} analysé${lockfiles > 1 ? "s" : ""}, ${transitive} dépendance${transitive > 1 ? "s" : ""} transitive${transitive > 1 ? "s" : ""} rattachée${transitive > 1 ? "s" : ""}.`
         : "Analyse des lockfiles désactivée.",
+      options.verifyProvenance
+        ? `${provenance?.registrySignaturesVerified ?? 0} signature${provenance?.registrySignaturesVerified === 1 ? "" : "s"} npm et ${provenance?.slsaProvenanceVerified ?? 0} provenance${provenance?.slsaProvenanceVerified === 1 ? "" : "s"} SLSA vérifiée${provenance?.slsaProvenanceVerified === 1 ? "" : "s"}.`
+        : "Vérification de provenance non demandée.",
       options.stdout ? "" : `Inventaire : ${options.output}`,
       options.sbomOutput ? `SBOM : ${options.sbomOutput}` : "",
     ]

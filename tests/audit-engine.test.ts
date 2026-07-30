@@ -414,3 +414,85 @@ test("turns OSV advisories into scored findings and SARIF rules", () => {
     ),
   );
 });
+
+test("turns invalid SLSA or registry proofs into a critical finding", () => {
+  const servers = auditConfiguration(
+    JSON.stringify({
+      schemaVersion: "1.0",
+      generatedAt: "2026-07-30T12:00:00.000Z",
+      collector: {
+        name: "MCP Sentinel Collector",
+        version: "1.4.0",
+        platform: "linux",
+      },
+      provenanceScan: {
+        provider: "npm-registry-sigstore",
+        status: "partial",
+        checkedAt: "2026-07-30T12:00:00.000Z",
+        packages: 1,
+        registrySignaturesVerified: 0,
+        slsaProvenanceVerified: 0,
+        missing: 0,
+        failed: 1,
+        message: "Une preuve est invalide.",
+      },
+      sources: [],
+      servers: [
+        {
+          id: "invalid-proof",
+          name: "invalid-proof",
+          source: { client: "VS Code", path: ".vscode/mcp.json" },
+          configuration: {
+            command: "npx",
+            args: ["@acme/mcp-server@1.2.3"],
+          },
+          redactions: [],
+          components: [
+            {
+              id: "npm-acme-mcp",
+              name: "@acme/mcp-server",
+              ecosystem: "npm",
+              componentType: "library",
+              version: "1.2.3",
+              purl: "pkg:npm/%40acme/mcp-server@1.2.3",
+              pinStatus: "pinned",
+              reference: "@acme/mcp-server@1.2.3",
+              evidence: "npx",
+              scope: "direct",
+              lockfile: "pnpm-lock.yaml",
+              integrityStatus: "recorded",
+              integrity: "sha512-Zml4dHVyZQ==",
+              provenance: {
+                provider: "npm-registry-sigstore",
+                checkedAt: "2026-07-30T12:00:00.000Z",
+                registrySignature: "failed",
+                slsaProvenance: "failed",
+                subjectDigest: "mismatched",
+                identityPolicy: "mismatched",
+                sourceRepository: "https://github.com/acme/mcp-server",
+                message: "Le digest ne correspond pas.",
+              },
+            },
+          ],
+          probe: {
+            status: "skipped-stdio",
+            checkedAt: "2026-07-30T12:00:00.000Z",
+            durationMs: 0,
+            message: "Serveur stdio non exécuté.",
+          },
+        },
+      ],
+    }),
+  );
+
+  const finding = servers[0].findings.find(
+    (entry) => entry.rule === "MCP-SUP-03",
+  );
+  assert.equal(finding?.severity, "critical");
+  assert.match(finding?.remediation ?? "", /lockfile/);
+  assert.equal(servers[0].provenanceScan?.failed, 1);
+  assert.equal(
+    servers[0].components?.[0].provenance?.subjectDigest,
+    "mismatched",
+  );
+});

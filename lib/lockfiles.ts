@@ -1,19 +1,41 @@
-import { readFile, stat } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { readFile, readdir, stat } from "node:fs/promises";
+import {
+  basename,
+  join,
+  resolve,
+} from "node:path";
+import { parse as parseYaml } from "yaml";
 import type { SupplyChainComponent } from "./supply-chain.ts";
+import type { WorkspacePackage } from "./workspaces.ts";
 
 const MAX_LOCKFILE_BYTES = 20_000_000;
 const MAX_COMPONENTS_PER_LOCKFILE = 5_000;
 const MAX_TRANSITIVE_COMPONENTS_PER_SERVER = 1_000;
+const MAX_DISCOVERED_LOCKFILES = 50;
+const MAX_DISCOVERY_DEPTH = 6;
+const IGNORED_DIRECTORIES = new Set([
+  ".git",
+  ".next",
+  ".turbo",
+  ".yarn",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+  "out",
+  "target",
+]);
 
 export const SUPPORTED_LOCKFILES = [
   "package-lock.json",
   "npm-shrinkwrap.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
   "uv.lock",
   "poetry.lock",
 ] as const;
 
-export type LockfileFormat = "npm" | "uv" | "poetry";
+export type LockfileFormat = "npm" | "pnpm" | "yarn" | "uv" | "poetry";
 export type LockfileStatus = "read" | "partial" | "missing" | "invalid";
 
 export type LockfileSummary = {
@@ -22,6 +44,7 @@ export type LockfileSummary = {
   ecosystem: "npm" | "pypi";
   status: LockfileStatus;
   components: number;
+  importers: number;
   matchedServers: number;
   message: string;
 };
@@ -29,13 +52,19 @@ export type LockfileSummary = {
 export type LockfileAnalysis = {
   summary: LockfileSummary;
   components: SupplyChainComponent[];
+  importers: Record<string, string[]>;
 };
 
 type PackageRecord = Record<string, unknown>;
+type ParsedGraph = {
+  components: SupplyChainComponent[];
+  importers: Record<string, string[]>;
+  truncated: boolean;
+};
 
 function cleanText(value: unknown, maxLength: number): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const cleaned = value
+  if (typeof value !== "string" && typeof value !== "number") return undefined;
+  const cleaned = String(value)
     .replace(/[\u0000-\u001f\u007f]/g, "")
     .trim();
   return cleaned && cleaned.length <= maxLength ? cleaned : undefined;
@@ -57,6 +86,13 @@ function packageVersion(value: unknown): string | undefined {
   return version && !/[\s/\\]/.test(version) ? version : undefined;
 }
 
+function safeIntegrity(value: unknown): string | undefined {
+  const integrity = cleanText(value, 1_024);
+  return integrity && /^sha(?:256|384|512)-[A-Za-z0-9+/=]+$/.test(integrity)
+    ? integrity
+    : undefined;
+}
+
 function encodePurlName(name: string): string {
   return name
     .split("/")
@@ -69,8 +105,7 @@ function purl(
   name: string,
   version: string,
 ): string {
-  const type = ecosystem === "npm" ? "npm" : "pypi";
-  return `pkg:${type}/${encodePurlName(name)}@${encodeURIComponent(version)}`;
+  return `pkg:${ecosystem}/${encodePurlName(name)}@${encodeURIComponent(version)}`;
 }
 
 function graphComponent(
@@ -78,7 +113,8 @@ function graphComponent(
   name: string,
   version: string,
   lockfile: string,
-  integrityRecorded: boolean,
+  integrity?: string,
+  checksumRecorded = false,
 ): SupplyChainComponent {
   const componentPurl = purl(ecosystem, name, version);
   return {
@@ -95,18 +131,18 @@ function graphComponent(
     scope: "transitive",
     dependencies: [],
     lockfile,
-    integrityStatus: integrityRecorded ? "recorded" : "missing",
+    integrityStatus: integrity || checksumRecorded ? "recorded" : "missing",
+    ...(integrity ? { integrity } : {}),
   };
 }
 
 function dependencyNames(record: PackageRecord): string[] {
-  const sections = [
+  const names = new Set<string>();
+  for (const section of [
     record.dependencies,
     record.optionalDependencies,
     record.peerDependencies,
-  ];
-  const names = new Set<string>();
-  for (const section of sections) {
+  ]) {
     if (!section || typeof section !== "object" || Array.isArray(section)) {
       continue;
     }
@@ -158,7 +194,7 @@ function resolveNpmDependency(
 function parseModernNpmLock(
   parsed: PackageRecord,
   displayPath: string,
-): { components: SupplyChainComponent[]; truncated: boolean } | undefined {
+): ParsedGraph | undefined {
   if (
     !parsed.packages ||
     typeof parsed.packages !== "object" ||
@@ -176,16 +212,16 @@ function parseModernNpmLock(
       )
       .map(([path, record]) => [path.replaceAll("\\", "/"), record]),
   );
+  const packageEntries = [...allRecords.entries()].filter(([path]) =>
+    path.includes("node_modules/"),
+  );
   const records = new Map(
-    [...allRecords.entries()]
-      .filter(([path]) => path.includes("node_modules/"))
-      .slice(0, MAX_COMPONENTS_PER_LOCKFILE),
+    packageEntries.slice(0, MAX_COMPONENTS_PER_LOCKFILE),
   );
   const byPath = new Map<string, SupplyChainComponent>();
 
   for (const [path, record] of records) {
-    const name =
-      packageName(record.name, "npm") ?? npmNameFromPath(path);
+    const name = packageName(record.name, "npm") ?? npmNameFromPath(path);
     const version = packageVersion(record.version);
     if (!name || !version) continue;
     byPath.set(
@@ -195,7 +231,7 @@ function parseModernNpmLock(
         name,
         version,
         displayPath,
-        typeof record.integrity === "string",
+        safeIntegrity(record.integrity),
       ),
     );
   }
@@ -205,26 +241,31 @@ function parseModernNpmLock(
     if (!record) continue;
     component.dependencies = dependencyNames(record).flatMap((name) => {
       const dependencyPath = resolveNpmDependency(path, name, allRecords);
-      const dependency = dependencyPath
-        ? byPath.get(dependencyPath)
-        : undefined;
+      const dependency = dependencyPath ? byPath.get(dependencyPath) : undefined;
       return dependency?.purl ? [dependency.purl] : [];
     });
   }
 
+  const importers: Record<string, string[]> = {};
+  for (const [path, record] of allRecords) {
+    if (path.includes("node_modules/")) continue;
+    importers[path || "."] = dependencyNames(record).flatMap((name) => {
+      const dependencyPath = resolveNpmDependency(path, name, allRecords);
+      const dependency = dependencyPath ? byPath.get(dependencyPath) : undefined;
+      return dependency?.purl ? [dependency.purl] : [];
+    });
+  }
   return {
     components: [...byPath.values()],
-    truncated:
-      [...allRecords.keys()].filter((path) =>
-        path.includes("node_modules/"),
-      ).length > MAX_COMPONENTS_PER_LOCKFILE,
+    importers,
+    truncated: packageEntries.length > MAX_COMPONENTS_PER_LOCKFILE,
   };
 }
 
 function parseLegacyNpmLock(
   parsed: PackageRecord,
   displayPath: string,
-): { components: SupplyChainComponent[]; truncated: boolean } | undefined {
+): ParsedGraph | undefined {
   if (
     !parsed.dependencies ||
     typeof parsed.dependencies !== "object" ||
@@ -254,7 +295,7 @@ function parseLegacyNpmLock(
         name,
         version,
         displayPath,
-        typeof record.integrity === "string",
+        safeIntegrity(record.integrity),
       );
       const nested =
         record.dependencies &&
@@ -279,8 +320,334 @@ function parseLegacyNpmLock(
     return children;
   }
 
-  visit(parsed.dependencies as Record<string, unknown>);
-  return { components: [...components.values()], truncated };
+  const roots = visit(parsed.dependencies as Record<string, unknown>);
+  return {
+    components: [...components.values()],
+    importers: { ".": roots },
+    truncated,
+  };
+}
+
+function parsePnpmPackageKey(
+  rawKey: string,
+): { name: string; version: string } | undefined {
+  const key = rawKey.trim().replace(/^\/+/, "").replace(/\(.+$/, "");
+  if (!key || /^(?:file|link|workspace|https?|git):/i.test(key)) return undefined;
+  const oldScoped = key.match(/^(@[^/]+\/[^/]+)\/([^/]+)$/);
+  const oldUnscoped = key.match(/^([^/@]+)\/([^/]+)$/);
+  if (oldScoped) {
+    const name = packageName(oldScoped[1], "npm");
+    const version = packageVersion(oldScoped[2]);
+    return name && version ? { name, version } : undefined;
+  }
+  if (oldUnscoped) {
+    const name = packageName(oldUnscoped[1], "npm");
+    const version = packageVersion(oldUnscoped[2]);
+    return name && version ? { name, version } : undefined;
+  }
+  const separator = key.startsWith("@")
+    ? key.indexOf("@", key.indexOf("/") + 1)
+    : key.lastIndexOf("@");
+  if (separator <= 0) return undefined;
+  const name = packageName(key.slice(0, separator), "npm");
+  const version = packageVersion(key.slice(separator + 1));
+  return name && version ? { name, version } : undefined;
+}
+
+function pnpmResolutionVersion(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const withoutPeers = value.replace(/\(.+$/, "");
+    const parsed = parsePnpmPackageKey(withoutPeers);
+    return parsed?.version ?? packageVersion(withoutPeers);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return pnpmResolutionVersion((value as PackageRecord).version);
+}
+
+function parsePnpmLock(raw: string, displayPath: string): ParsedGraph {
+  const parsed = parseYaml(raw, { maxAliasCount: 0 }) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid pnpm lockfile");
+  }
+  const root = parsed as PackageRecord;
+  const packages =
+    root.packages && typeof root.packages === "object" && !Array.isArray(root.packages)
+      ? (root.packages as Record<string, unknown>)
+      : {};
+  const snapshots =
+    root.snapshots &&
+    typeof root.snapshots === "object" &&
+    !Array.isArray(root.snapshots)
+      ? (root.snapshots as Record<string, unknown>)
+      : {};
+  const packageEntries = Object.entries(packages);
+  const selected = packageEntries.slice(0, MAX_COMPONENTS_PER_LOCKFILE);
+  const byKey = new Map<string, SupplyChainComponent>();
+  const byNameVersion = new Map<string, SupplyChainComponent>();
+
+  for (const [key, value] of selected) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const record = value as PackageRecord;
+    const parsedKey = parsePnpmPackageKey(key);
+    const name = packageName(record.name, "npm") ?? parsedKey?.name;
+    const version = packageVersion(record.version) ?? parsedKey?.version;
+    if (!name || !version) continue;
+    const resolution =
+      record.resolution &&
+      typeof record.resolution === "object" &&
+      !Array.isArray(record.resolution)
+        ? (record.resolution as PackageRecord)
+        : {};
+    const component = graphComponent(
+      "npm",
+      name,
+      version,
+      displayPath,
+      safeIntegrity(resolution.integrity),
+    );
+    byKey.set(key.replace(/^\/+/, ""), component);
+    byNameVersion.set(`${name}@${version}`, component);
+  }
+
+  const resolveDependency = (name: string, value: unknown) => {
+    const version = pnpmResolutionVersion(value);
+    const dependency = version
+      ? byNameVersion.get(`${name}@${version}`)
+      : undefined;
+    return dependency?.purl;
+  };
+  for (const [rawKey, component] of byKey) {
+    const rawRecord = snapshots[rawKey] ?? snapshots[`/${rawKey}`] ?? packages[rawKey];
+    if (!rawRecord || typeof rawRecord !== "object" || Array.isArray(rawRecord)) {
+      continue;
+    }
+    const record = rawRecord as PackageRecord;
+    component.dependencies = [
+      record.dependencies,
+      record.optionalDependencies,
+    ].flatMap((section) => {
+      if (!section || typeof section !== "object" || Array.isArray(section)) {
+        return [];
+      }
+      return Object.entries(section).flatMap(([rawName, value]) => {
+        const name = packageName(rawName, "npm");
+        const dependency = name ? resolveDependency(name, value) : undefined;
+        return dependency ? [dependency] : [];
+      });
+    });
+  }
+
+  const importers: Record<string, string[]> = {};
+  if (
+    root.importers &&
+    typeof root.importers === "object" &&
+    !Array.isArray(root.importers)
+  ) {
+    for (const [importerPath, value] of Object.entries(
+      root.importers as Record<string, unknown>,
+    )) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const importer = value as PackageRecord;
+      importers[importerPath.replaceAll("\\", "/") || "."] = [
+        importer.dependencies,
+        importer.optionalDependencies,
+        importer.devDependencies,
+      ].flatMap((section) => {
+        if (!section || typeof section !== "object" || Array.isArray(section)) {
+          return [];
+        }
+        return Object.entries(section).flatMap(([rawName, resolution]) => {
+          const name = packageName(rawName, "npm");
+          const dependency = name
+            ? resolveDependency(name, resolution)
+            : undefined;
+          return dependency ? [dependency] : [];
+        });
+      });
+    }
+  }
+  return {
+    components: [...byNameVersion.values()],
+    importers,
+    truncated: packageEntries.length > MAX_COMPONENTS_PER_LOCKFILE,
+  };
+}
+
+function yarnPackageName(descriptor: string): string | undefined {
+  const cleaned = descriptor.replace(/^["']|["']$/g, "").trim();
+  const separator = cleaned.startsWith("@")
+    ? cleaned.indexOf("@", cleaned.indexOf("/") + 1)
+    : cleaned.indexOf("@");
+  return separator > 0
+    ? packageName(cleaned.slice(0, separator), "npm")
+    : undefined;
+}
+
+function splitYarnDescriptors(header: string): string[] {
+  const descriptors: string[] = [];
+  for (const match of header.matchAll(/(?:^|,\s*)(?:"([^"]+)"|'([^']+)'|([^,\s]+))/g)) {
+    const descriptor = match[1] ?? match[2] ?? match[3];
+    if (descriptor) descriptors.push(descriptor);
+  }
+  return descriptors;
+}
+
+function parseYarnClassic(raw: string, displayPath: string): ParsedGraph {
+  type YarnRecord = {
+    descriptors: string[];
+    version?: string;
+    integrity?: string;
+    dependencies: Array<[string, string]>;
+  };
+  const records: YarnRecord[] = [];
+  let current: YarnRecord | undefined;
+  let dependencySection = false;
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim() || line.trimStart().startsWith("#")) continue;
+    if (!line.startsWith(" ") && line.endsWith(":")) {
+      current = {
+        descriptors: splitYarnDescriptors(line.slice(0, -1)),
+        dependencies: [],
+      };
+      records.push(current);
+      dependencySection = false;
+      continue;
+    }
+    if (!current) continue;
+    const property = line.match(/^\s{2}([A-Za-z]+)\s+["']?([^"'\s]+)["']?\s*$/);
+    if (property) {
+      dependencySection = false;
+      if (property[1] === "version") current.version = property[2];
+      if (property[1] === "integrity") current.integrity = property[2];
+      continue;
+    }
+    if (/^\s{2}(?:dependencies|optionalDependencies):\s*$/.test(line)) {
+      dependencySection = true;
+      continue;
+    }
+    if (dependencySection) {
+      const dependency = line.match(
+        /^\s{4}(?:"([^"]+)"|'([^']+)'|([^\s]+))\s+(?:"([^"]+)"|'([^']+)'|([^\s]+))\s*$/,
+      );
+      if (dependency) {
+        current.dependencies.push([
+          dependency[1] ?? dependency[2] ?? dependency[3],
+          dependency[4] ?? dependency[5] ?? dependency[6],
+        ]);
+      }
+    }
+  }
+
+  const selected = records.slice(0, MAX_COMPONENTS_PER_LOCKFILE);
+  const descriptorMap = new Map<string, SupplyChainComponent>();
+  const components = new Map<string, SupplyChainComponent>();
+  for (const record of selected) {
+    const name = yarnPackageName(record.descriptors[0] ?? "");
+    const version = packageVersion(record.version);
+    if (!name || !version) continue;
+    const component = graphComponent(
+      "npm",
+      name,
+      version,
+      displayPath,
+      safeIntegrity(record.integrity),
+    );
+    for (const descriptor of record.descriptors) {
+      descriptorMap.set(descriptor, component);
+    }
+    if (component.purl) components.set(component.purl, component);
+  }
+  for (const record of selected) {
+    const component = descriptorMap.get(record.descriptors[0] ?? "");
+    if (!component) continue;
+    component.dependencies = record.dependencies.flatMap(([name, range]) => {
+      const dependency = descriptorMap.get(`${name}@${range}`);
+      return dependency?.purl ? [dependency.purl] : [];
+    });
+  }
+  return {
+    components: [...components.values()],
+    importers: {},
+    truncated: records.length > MAX_COMPONENTS_PER_LOCKFILE,
+  };
+}
+
+function parseYarnBerry(raw: string, displayPath: string): ParsedGraph {
+  const parsed = parseYaml(raw, { maxAliasCount: 0 }) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid Yarn lockfile");
+  }
+  const entries = Object.entries(parsed as PackageRecord).filter(
+    ([key]) => key !== "__metadata",
+  );
+  const selected = entries.slice(0, MAX_COMPONENTS_PER_LOCKFILE);
+  const descriptorMap = new Map<string, SupplyChainComponent>();
+  const components = new Map<string, SupplyChainComponent>();
+  const dependenciesByPurl = new Map<string, Array<[string, string]>>();
+
+  for (const [header, value] of selected) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const record = value as PackageRecord;
+    const resolution = cleanText(record.resolution, 500);
+    if (!resolution || /@(?:workspace|link|portal|file):/.test(resolution)) {
+      continue;
+    }
+    const resolutionName = resolution.includes("@npm:")
+      ? resolution.slice(0, resolution.indexOf("@npm:"))
+      : undefined;
+    const descriptors = splitYarnDescriptors(header);
+    const name =
+      packageName(resolutionName, "npm") ??
+      yarnPackageName(descriptors[0] ?? "");
+    const version = packageVersion(record.version);
+    if (!name || !version) continue;
+    const component = graphComponent(
+      "npm",
+      name,
+      version,
+      displayPath,
+      undefined,
+      typeof record.checksum === "string",
+    );
+    for (const descriptor of descriptors) descriptorMap.set(descriptor, component);
+    if (component.purl) {
+      components.set(component.purl, component);
+      const dependencies =
+        record.dependencies &&
+        typeof record.dependencies === "object" &&
+        !Array.isArray(record.dependencies)
+          ? Object.entries(record.dependencies as Record<string, unknown>).flatMap(
+              ([rawName, value]) => {
+                const name = packageName(rawName, "npm");
+                const range = cleanText(value, 500);
+                return name && range ? [[name, range] as [string, string]] : [];
+              },
+            )
+          : [];
+      dependenciesByPurl.set(component.purl, dependencies);
+    }
+  }
+  for (const [componentPurl, dependencies] of dependenciesByPurl) {
+    const component = components.get(componentPurl);
+    if (!component) continue;
+    component.dependencies = dependencies.flatMap(([name, range]) => {
+      const dependency = descriptorMap.get(`${name}@${range}`);
+      return dependency?.purl ? [dependency.purl] : [];
+    });
+  }
+  return {
+    components: [...components.values()],
+    importers: {},
+    truncated: entries.length > MAX_COMPONENTS_PER_LOCKFILE,
+  };
+}
+
+function parseYarnLock(raw: string, displayPath: string): ParsedGraph {
+  return /^\s*__metadata:\s*$/m.test(raw)
+    ? parseYarnBerry(raw, displayPath)
+    : parseYarnClassic(raw, displayPath);
 }
 
 function tomlString(block: string, key: string): string | undefined {
@@ -297,23 +664,17 @@ function pythonDependencyNames(block: string): string[] {
     const section = block.slice(arrayStart);
     const closing = section.search(/^\]\s*$/m);
     const array = closing >= 0 ? section.slice(0, closing + 1) : section;
-    for (const match of array.matchAll(
-      /\{\s*name\s*=\s*["']([^"']+)["']/g,
-    )) {
+    for (const match of array.matchAll(/\{\s*name\s*=\s*["']([^"']+)["']/g)) {
       const name = packageName(match[1], "pypi");
       if (name) names.add(name);
     }
   }
-
   const poetryHeader = /^\[package\.dependencies\]\s*$/m.exec(block);
   let poetrySection: string | undefined;
   if (poetryHeader?.index !== undefined) {
-    const remainder = block.slice(
-      poetryHeader.index + poetryHeader[0].length,
-    );
+    const remainder = block.slice(poetryHeader.index + poetryHeader[0].length);
     const nextHeader = remainder.search(/^\[/m);
-    poetrySection =
-      nextHeader >= 0 ? remainder.slice(0, nextHeader) : remainder;
+    poetrySection = nextHeader >= 0 ? remainder.slice(0, nextHeader) : remainder;
   }
   if (poetrySection) {
     for (const match of poetrySection.matchAll(
@@ -326,31 +687,27 @@ function pythonDependencyNames(block: string): string[] {
   return [...names];
 }
 
-function parsePythonLock(
-  raw: string,
-  displayPath: string,
-): { components: SupplyChainComponent[]; truncated: boolean } {
+function parsePythonLock(raw: string, displayPath: string): ParsedGraph {
   const blocks = raw.split(/^\[\[package\]\]\s*$/m).slice(1);
-  const records = blocks
-    .slice(0, MAX_COMPONENTS_PER_LOCKFILE)
-    .flatMap((block) => {
-      const name = packageName(tomlString(block, "name"), "pypi");
-      const version = packageVersion(tomlString(block, "version"));
-      if (!name || !version) return [];
-      return [
-        {
+  const records = blocks.slice(0, MAX_COMPONENTS_PER_LOCKFILE).flatMap((block) => {
+    const name = packageName(tomlString(block, "name"), "pypi");
+    const version = packageVersion(tomlString(block, "version"));
+    if (!name || !version) return [];
+    const hash = block.match(/\bhash\s*=\s*["'](sha(?:256|384|512):[^"']+)["']/i);
+    return [
+      {
+        name,
+        dependencies: pythonDependencyNames(block),
+        component: graphComponent(
+          "pypi",
           name,
-          dependencies: pythonDependencyNames(block),
-          component: graphComponent(
-            "pypi",
-            name,
-            version,
-            displayPath,
-            /\bhash\s*=\s*["']sha(?:256|384|512):/i.test(block),
-          ),
-        },
-      ];
-    });
+          version,
+          displayPath,
+          hash?.[1]?.replace(":", "-"),
+        ),
+      },
+    ];
+  });
   const byName = new Map<string, SupplyChainComponent[]>();
   for (const record of records) {
     const matches = byName.get(record.name) ?? [];
@@ -358,30 +715,29 @@ function parsePythonLock(
     byName.set(record.name, matches);
   }
   for (const record of records) {
-    record.component.dependencies = record.dependencies.flatMap(
-      (name) => {
-        const matches = byName.get(name) ?? [];
-        return matches.length === 1 && matches[0].purl
-          ? [matches[0].purl]
-          : [];
-      },
-    );
+    record.component.dependencies = record.dependencies.flatMap((name) => {
+      const matches = byName.get(name) ?? [];
+      return matches.length === 1 && matches[0].purl ? [matches[0].purl] : [];
+    });
   }
   return {
     components: records.map((record) => record.component),
+    importers: {},
     truncated: blocks.length > MAX_COMPONENTS_PER_LOCKFILE,
   };
 }
 
 function formatForPath(filePath: string): LockfileFormat {
   const name = basename(filePath).toLowerCase();
+  if (name === "pnpm-lock.yaml") return "pnpm";
+  if (name === "yarn.lock") return "yarn";
   if (name === "uv.lock") return "uv";
   if (name === "poetry.lock") return "poetry";
   return "npm";
 }
 
 function ecosystemForFormat(format: LockfileFormat): "npm" | "pypi" {
-  return format === "npm" ? "npm" : "pypi";
+  return ["npm", "pnpm", "yarn"].includes(format) ? "npm" : "pypi";
 }
 
 function failedAnalysis(
@@ -397,15 +753,57 @@ function failedAnalysis(
       ecosystem: ecosystemForFormat(format),
       status,
       components: 0,
+      importers: 0,
       matchedServers: 0,
       message,
     },
     components: [],
+    importers: {},
   };
 }
 
-export function discoverLockfilePaths(workspace: string): string[] {
-  return SUPPORTED_LOCKFILES.map((name) => join(resolve(workspace), name));
+function normalizeImporterPath(value: string): string {
+  const normalized = value.replaceAll("\\", "/").replace(/^\.\/+/, "").replace(/\/+$/, "");
+  return normalized || ".";
+}
+
+export async function discoverLockfilePaths(workspace: string): Promise<string[]> {
+  const root = resolve(workspace);
+  const found: string[] = [];
+  async function visit(directory: string, depth: number): Promise<void> {
+    if (depth > MAX_DISCOVERY_DEPTH || found.length >= MAX_DISCOVERED_LOCKFILES) {
+      return;
+    }
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (
+        entry.isFile() &&
+        SUPPORTED_LOCKFILES.includes(
+          entry.name.toLowerCase() as (typeof SUPPORTED_LOCKFILES)[number],
+        )
+      ) {
+        found.push(join(directory, entry.name));
+        if (found.length >= MAX_DISCOVERED_LOCKFILES) return;
+      }
+    }
+    await Promise.all(
+      entries
+        .filter(
+          (entry) =>
+            entry.isDirectory() &&
+            !entry.isSymbolicLink() &&
+            !IGNORED_DIRECTORIES.has(entry.name),
+        )
+        .map((entry) => visit(join(directory, entry.name), depth + 1)),
+    );
+  }
+  await visit(root, 0);
+  return found.slice(0, MAX_DISCOVERED_LOCKFILES);
 }
 
 export async function analyzeLockfile(
@@ -437,17 +835,11 @@ export async function analyzeLockfile(
       "Lockfile ignoré : taille supérieure à 20 Mo.",
     );
   }
-
   let raw: string;
   try {
     raw = await readFile(filePath, "utf8");
   } catch {
-    return failedAnalysis(
-      displayPath,
-      format,
-      "invalid",
-      "Lockfile illisible.",
-    );
+    return failedAnalysis(displayPath, format, "invalid", "Lockfile illisible.");
   }
 
   try {
@@ -460,7 +852,11 @@ export async function analyzeLockfile(
               parseLegacyNpmLock(parsed, displayPath)
             );
           })()
-        : parsePythonLock(raw, displayPath);
+        : format === "pnpm"
+          ? parsePnpmLock(raw, displayPath)
+          : format === "yarn"
+            ? parseYarnLock(raw, displayPath)
+            : parsePythonLock(raw, displayPath);
     if (!result) {
       return failedAnalysis(
         displayPath,
@@ -476,12 +872,19 @@ export async function analyzeLockfile(
         ecosystem: ecosystemForFormat(format),
         status: result.truncated ? "partial" : "read",
         components: result.components.length,
+        importers: Object.keys(result.importers).length,
         matchedServers: 0,
         message: result.truncated
           ? `Analyse limitée aux ${MAX_COMPONENTS_PER_LOCKFILE} premiers composants.`
           : "Lockfile analysé sans exécuter de gestionnaire de paquets.",
       },
       components: result.components,
+      importers: Object.fromEntries(
+        Object.entries(result.importers).map(([path, dependencies]) => [
+          normalizeImporterPath(path),
+          [...new Set(dependencies)],
+        ]),
+      ),
     };
   } catch {
     return failedAnalysis(
@@ -494,10 +897,7 @@ export async function analyzeLockfile(
 }
 
 function componentKey(
-  component: Pick<
-    SupplyChainComponent,
-    "ecosystem" | "name" | "version"
-  >,
+  component: Pick<SupplyChainComponent, "ecosystem" | "name" | "version">,
 ): string {
   const name =
     component.ecosystem === "pypi"
@@ -506,9 +906,45 @@ function componentKey(
   return `${component.ecosystem}:${name}:${component.version ?? ""}`;
 }
 
+function workspaceComponent(workspace: WorkspacePackage): SupplyChainComponent {
+  return {
+    id: `workspace:${encodeURIComponent(workspace.path)}:${encodeURIComponent(workspace.name)}`,
+    ecosystem: "npm",
+    name: workspace.name,
+    ...(workspace.version ? { version: workspace.version } : {}),
+    reference: workspace.path,
+    componentType: "application",
+    pinStatus: "not-applicable",
+    evidence: `Package local du monorepo (${workspace.path}) ; aucune publication registre n’est supposée.`,
+    scope: "direct",
+    dependencies: [],
+    workspace: workspace.path,
+  };
+}
+
+function importerDependencies(
+  analysis: LockfileAnalysis,
+  workspace: WorkspacePackage,
+  byRef: Map<string, SupplyChainComponent>,
+): string[] {
+  const exact = analysis.importers[normalizeImporterPath(workspace.path)];
+  if (exact) return exact.filter((dependency) => byRef.has(dependency));
+  const byName = new Map<string, SupplyChainComponent[]>();
+  for (const component of byRef.values()) {
+    const matches = byName.get(component.name) ?? [];
+    matches.push(component);
+    byName.set(component.name, matches);
+  }
+  return workspace.dependencies.flatMap((name) => {
+    const matches = byName.get(name) ?? [];
+    return matches.length === 1 && matches[0].purl ? [matches[0].purl] : [];
+  });
+}
+
 export function enrichComponentsFromLockfiles(
   directComponents: SupplyChainComponent[],
   analyses: LockfileAnalysis[],
+  workspace?: WorkspacePackage,
 ): {
   components: SupplyChainComponent[];
   matchedLockfiles: Set<string>;
@@ -517,9 +953,11 @@ export function enrichComponentsFromLockfiles(
   const result = new Map<string, SupplyChainComponent>();
   const matchedLockfiles = new Set<string>();
   let truncated = false;
-  for (const component of directComponents) {
-    const ref = component.purl ?? component.id;
-    result.set(ref, { ...component, scope: "direct" });
+  const direct = workspace
+    ? [...directComponents, workspaceComponent(workspace)]
+    : directComponents;
+  for (const component of direct) {
+    result.set(component.purl ?? component.id, { ...component, scope: "direct" });
   }
 
   for (const analysis of analyses) {
@@ -539,6 +977,7 @@ export function enrichComponentsFromLockfiles(
                   ...(component.dependencies ?? []),
                 ]),
               ],
+              integrity: existing.integrity ?? component.integrity,
             }
           : component,
       );
@@ -549,28 +988,53 @@ export function enrichComponentsFromLockfiles(
         component,
       ]),
     );
+    const roots: Array<{
+      component: SupplyChainComponent;
+      match?: SupplyChainComponent;
+      dependencies: string[];
+    }> = [];
+    for (const component of directComponents) {
+      if (!component.version || component.pinStatus !== "pinned") continue;
+      const match = byKey.get(componentKey(component));
+      if (match) {
+        roots.push({
+          component,
+          match,
+          dependencies: match.dependencies ?? [],
+        });
+      }
+    }
+    if (workspace && analysis.summary.ecosystem === "npm") {
+      const root = [...result.values()].find(
+        (component) => component.workspace === workspace.path,
+      );
+      if (root) {
+        roots.push({
+          component: root,
+          dependencies: importerDependencies(analysis, workspace, byRef),
+        });
+      }
+    }
 
-    for (const direct of directComponents) {
-      if (!direct.version || direct.pinStatus !== "pinned") continue;
-      const match = byKey.get(componentKey(direct));
-      if (!match) continue;
+    for (const root of roots) {
+      if (!root.dependencies.length && !root.match) continue;
       matchedLockfiles.add(analysis.summary.path);
-      const directRef = direct.purl ?? direct.id;
-      const current = result.get(directRef) ?? direct;
-      result.set(directRef, {
+      const rootRef = root.component.purl ?? root.component.id;
+      const current = result.get(rootRef) ?? root.component;
+      result.set(rootRef, {
         ...current,
         scope: "direct",
         dependencies: [
-          ...new Set([
-            ...(current.dependencies ?? []),
-            ...(match.dependencies ?? []),
-          ]),
+          ...new Set([...(current.dependencies ?? []), ...root.dependencies]),
         ],
-        lockfile: match.lockfile,
-        integrityStatus: match.integrityStatus,
+        ...(root.match?.lockfile ? { lockfile: root.match.lockfile } : {}),
+        ...(root.match?.integrityStatus
+          ? { integrityStatus: root.match.integrityStatus }
+          : {}),
+        ...(root.match?.integrity ? { integrity: root.match.integrity } : {}),
       });
 
-      const queue = [...(match.dependencies ?? [])];
+      const queue = [...root.dependencies];
       const visited = new Set<string>();
       while (queue.length) {
         const dependencyRef = queue.shift();

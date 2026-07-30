@@ -1032,8 +1032,9 @@ export default function Home() {
             <ul className="collector-guarantees">
               <li>Aucun serveur stdio et aucun outil MCP n’est exécuté.</li>
               <li>
-                Les lockfiles npm, uv et Poetry sont lus sans lancer leur
-                gestionnaire de paquets.
+                Les lockfiles npm, pnpm, Yarn, uv et Poetry sont lus sans
+                lancer leur gestionnaire de paquets, y compris dans les
+                monorepos.
               </li>
               <li>
                 OSV reçoit uniquement les PURL avec une version exacte, jamais
@@ -1042,6 +1043,10 @@ export default function Home() {
               <li>
                 Seuls les endpoints HTTPS reçoivent une négociation{" "}
                 <code>initialize</code>.
+              </li>
+              <li>
+                Les preuves npm rapprochent signature, intégrité du lockfile et
+                attestation SLSA vérifiée par Sigstore.
               </li>
             </ul>
 
@@ -1137,21 +1142,40 @@ export default function Home() {
                         : `${selectedServer.components.length} composant${selectedServer.components.length > 1 ? "s" : ""}`}
                     </strong>
                   </div>
-                  {selectedServer.vulnerabilityScan ? (
-                    <span
-                      className={`osv-status ${selectedServer.vulnerabilityScan.status}`}
-                      title={selectedServer.vulnerabilityScan.message}
-                    >
-                      OSV{" "}
-                      {selectedServer.vulnerabilityScan.status === "complete"
-                        ? "vérifié"
-                        : selectedServer.vulnerabilityScan.status === "partial"
-                          ? "partiel"
-                          : "indisponible"}
-                    </span>
-                  ) : (
-                    <span aria-hidden="true">⬡</span>
-                  )}
+                  <div className="supply-chain-statuses">
+                    {selectedServer.vulnerabilityScan ? (
+                      <span
+                        className={`osv-status ${selectedServer.vulnerabilityScan.status}`}
+                        title={selectedServer.vulnerabilityScan.message}
+                      >
+                        OSV{" "}
+                        {selectedServer.vulnerabilityScan.status === "complete"
+                          ? "vérifié"
+                          : selectedServer.vulnerabilityScan.status === "partial"
+                            ? "partiel"
+                            : "indisponible"}
+                      </span>
+                    ) : null}
+                    {selectedServer.provenanceScan ? (
+                      <span
+                        className={`provenance-status ${selectedServer.provenanceScan.status}`}
+                        title={selectedServer.provenanceScan.message}
+                      >
+                        SLSA{" "}
+                        {selectedServer.provenanceScan.status === "complete"
+                          ? "vérifié"
+                          : selectedServer.provenanceScan.status === "partial"
+                            ? "partiel"
+                            : "indisponible"}
+                      </span>
+                    ) : null}
+                    {!selectedServer.vulnerabilityScan &&
+                    !selectedServer.provenanceScan ? (
+                      <span className="supply-chain-placeholder" aria-hidden="true">
+                        ⬡
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="component-list">
                   {selectedServer.components.slice(0, 200).map((component) => (
@@ -1171,6 +1195,11 @@ export default function Home() {
                               ? "transitif"
                               : "direct"}
                           </span>
+                          {component.workspace ? (
+                            <span className="component-workspace">
+                              workspace · {component.workspace}
+                            </span>
+                          ) : null}
                         </span>
                         <strong>{component.name}</strong>
                         <small>
@@ -1181,6 +1210,42 @@ export default function Home() {
                         </small>
                       </div>
                       <div className="component-row-actions">
+                        {component.provenance ? (
+                          <span
+                            className={`component-provenance ${
+                              component.provenance.registrySignature ===
+                                "failed" ||
+                              component.provenance.slsaProvenance === "failed"
+                                ? "failed"
+                                : component.provenance.registrySignature ===
+                                      "verified" &&
+                                    component.provenance.slsaProvenance ===
+                                      "verified"
+                                  ? "verified"
+                                  : component.provenance.registrySignature ===
+                                        "error" ||
+                                      component.provenance.slsaProvenance ===
+                                        "error"
+                                    ? "error"
+                                    : "partial"
+                            }`}
+                            title={component.provenance.message}
+                          >
+                            {component.provenance.registrySignature ===
+                              "failed" ||
+                            component.provenance.slsaProvenance === "failed"
+                              ? "preuve invalide"
+                              : component.provenance.registrySignature ===
+                                    "verified" &&
+                                  component.provenance.slsaProvenance ===
+                                    "verified"
+                                ? "SIG + SLSA"
+                                : component.provenance.registrySignature ===
+                                    "verified"
+                                  ? "SIG OK"
+                                  : "preuve partielle"}
+                          </span>
+                        ) : null}
                         {component.vulnerabilities?.length ? (
                           <span className="vulnerability-count">
                             {component.vulnerabilities.length} avis

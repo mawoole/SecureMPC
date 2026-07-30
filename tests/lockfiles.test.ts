@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -198,6 +198,139 @@ test("rejects malformed lockfiles and never guesses from unpinned launchers", as
     assert.equal(enriched.components.length, 1);
     assert.equal(enriched.components[0].version, undefined);
     assert.equal(enriched.components[0].scope, "direct");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("resolves pnpm importers and keeps each monorepo package graph isolated", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mcp-lockfile-pnpm-"));
+  const lockfilePath = join(directory, "pnpm-lock.yaml");
+  try {
+    await writeFile(
+      lockfilePath,
+      `lockfileVersion: '9.0'
+importers:
+  packages/mcp:
+    dependencies:
+      "@acme/mcp-server":
+        specifier: 1.2.3
+        version: 1.2.3
+  packages/web:
+    dependencies:
+      unrelated:
+        specifier: 9.0.0
+        version: 9.0.0
+packages:
+  "@acme/mcp-server@1.2.3":
+    resolution:
+      integrity: sha512-ZGlyZWN0
+  helper@2.0.0:
+    resolution:
+      integrity: sha512-aGVscGVy
+  unrelated@9.0.0:
+    resolution:
+      integrity: sha512-dW5yZWxhdGVk
+snapshots:
+  "@acme/mcp-server@1.2.3":
+    dependencies:
+      helper: 2.0.0
+  helper@2.0.0: {}
+  unrelated@9.0.0: {}
+`,
+      "utf8",
+    );
+    const analysis = await analyzeLockfile(lockfilePath, "pnpm-lock.yaml");
+    const enriched = enrichComponentsFromLockfiles([], [analysis], {
+      path: "packages/mcp",
+      absolutePath: join(directory, "packages", "mcp"),
+      name: "@acme/local-mcp",
+      version: "1.0.0",
+      private: true,
+      dependencies: ["@acme/mcp-server"],
+    });
+
+    assert.equal(analysis.summary.format, "pnpm");
+    assert.equal(analysis.summary.importers, 2);
+    assert.deepEqual(
+      enriched.components.map((component) => component.name),
+      ["@acme/local-mcp", "@acme/mcp-server", "helper"],
+    );
+    assert.equal(
+      enriched.components.some((component) => component.name === "unrelated"),
+      false,
+    );
+    assert.equal(enriched.components[0].workspace, "packages/mcp");
+    assert.equal(enriched.matchedLockfiles.has("pnpm-lock.yaml"), true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("reads Yarn Classic and Berry dependency graphs without executing Yarn", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mcp-lockfile-yarn-"));
+  const classicPath = join(directory, "classic", "yarn.lock");
+  const berryPath = join(directory, "berry", "yarn.lock");
+  try {
+    await mkdir(join(directory, "classic"), { recursive: true });
+    await mkdir(join(directory, "berry"), { recursive: true });
+    await writeFile(
+      classicPath,
+      `# yarn lockfile v1
+
+"@acme/mcp-server@1.2.3":
+  version "1.2.3"
+  resolved "https://registry.yarnpkg.com/@acme/mcp-server/-/mcp-server-1.2.3.tgz"
+  integrity sha512-ZGlyZWN0
+  dependencies:
+    helper "^2.0.0"
+
+helper@^2.0.0:
+  version "2.1.0"
+  integrity sha512-aGVscGVy
+`,
+      "utf8",
+    );
+    await writeFile(
+      berryPath,
+      `__metadata:
+  version: 8
+
+"@acme/mcp-server@npm:1.2.3":
+  version: 1.2.3
+  resolution: "@acme/mcp-server@npm:1.2.3"
+  checksum: 10c0/example
+  dependencies:
+    helper: "npm:^2.0.0"
+
+"helper@npm:^2.0.0":
+  version: 2.1.0
+  resolution: "helper@npm:2.1.0"
+  checksum: 10c0/helper
+`,
+      "utf8",
+    );
+    const direct = extractSupplyChainComponents({
+      command: "npx",
+      args: ["@acme/mcp-server@1.2.3"],
+    });
+    const classic = await analyzeLockfile(classicPath, "yarn.lock");
+    const berry = await analyzeLockfile(berryPath, "yarn.lock");
+    const classicGraph = enrichComponentsFromLockfiles(direct, [classic]);
+    const berryGraph = enrichComponentsFromLockfiles(direct, [berry]);
+
+    assert.equal(classic.summary.format, "yarn");
+    assert.equal(berry.summary.format, "yarn");
+    assert.deepEqual(
+      classicGraph.components.map((component) => component.name),
+      ["@acme/mcp-server", "helper"],
+    );
+    assert.deepEqual(
+      berryGraph.components.map((component) => component.name),
+      ["@acme/mcp-server", "helper"],
+    );
+    assert.equal(berryGraph.components[0].integrityStatus, "recorded");
+    assert.equal(berryGraph.components[0].integrity, undefined);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

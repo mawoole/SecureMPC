@@ -21,6 +21,15 @@ import {
   enrichComponentsFromLockfiles,
   type LockfileSummary,
 } from "./lockfiles.ts";
+import {
+  verifyComponentProvenance,
+  type ProvenancePolicy,
+  type ProvenanceScanSummary,
+} from "./provenance.ts";
+import {
+  discoverWorkspacePackages,
+  selectWorkspacePackage,
+} from "./workspaces.ts";
 
 export const COLLECTOR_SCHEMA_VERSION = "1.0" as const;
 export const MCP_PROTOCOL_VERSION = "2025-11-25";
@@ -76,6 +85,7 @@ export type CollectedServer = {
     transitive: number;
     truncated: boolean;
     lockfiles: string[];
+    workspaces?: string[];
   };
   probe: PassiveProbe;
 };
@@ -97,6 +107,7 @@ export type CollectorInventory = {
   servers: CollectedServer[];
   lockfiles?: LockfileSummary[];
   vulnerabilityScan?: VulnerabilityScanSummary;
+  provenanceScan?: ProvenanceScanSummary;
 };
 
 export type CandidateFile = {
@@ -120,6 +131,8 @@ export type CollectOptions = DiscoveryContext & {
   fetchImpl?: typeof fetch;
   scanLockfiles?: boolean;
   lockfilePaths?: string[];
+  verifyProvenance?: boolean;
+  provenancePolicy?: ProvenancePolicy;
 };
 
 const SENSITIVE_KEY =
@@ -832,8 +845,11 @@ export async function collectInventory(
   const explicitLockfiles = (options.lockfilePaths ?? []).map((filePath) =>
     resolve(filePath),
   );
+  const discoveredLockfiles = options.scanLockfiles
+    ? await discoverLockfilePaths(workspace)
+    : [];
   const lockfilePaths = [
-    ...(options.scanLockfiles ? discoverLockfilePaths(workspace) : []),
+    ...discoveredLockfiles,
     ...explicitLockfiles,
   ]
     .filter(
@@ -861,11 +877,20 @@ export async function collectInventory(
       analysis.summary.status !== "missing" ||
       explicitSet.has(resolve(lockfilePaths[index]).toLowerCase()),
   );
+  const workspacePackages = options.scanLockfiles
+    ? await discoverWorkspacePackages(workspace)
+    : [];
   const matchedServers = new Map<string, number>();
   for (const server of servers) {
+    const workspacePackage = selectWorkspacePackage(
+      workspacePackages,
+      server.configuration,
+      workspace,
+    );
     const enrichment = enrichComponentsFromLockfiles(
       server.components,
       includedAnalyses,
+      workspacePackage,
     );
     server.components = enrichment.components;
     if (
@@ -883,6 +908,9 @@ export async function collectInventory(
         ).length,
         truncated: enrichment.truncated,
         lockfiles: [...enrichment.matchedLockfiles],
+        ...(workspacePackage
+          ? { workspaces: [workspacePackage.path] }
+          : {}),
       };
       for (const lockfile of enrichment.matchedLockfiles) {
         matchedServers.set(
@@ -891,6 +919,26 @@ export async function collectInventory(
         );
       }
     }
+  }
+
+  let provenanceScan: ProvenanceScanSummary | undefined;
+  if (options.verifyProvenance) {
+    const componentCounts = servers.map((server) => server.components.length);
+    const verification = await verifyComponentProvenance(
+      servers.flatMap((server) => server.components),
+      {
+        fetchImpl: options.fetchImpl,
+        now,
+        policy: options.provenancePolicy,
+      },
+    );
+    let cursor = 0;
+    servers.forEach((server, index) => {
+      const count = componentCounts[index];
+      server.components = verification.components.slice(cursor, cursor + count);
+      cursor += count;
+    });
+    provenanceScan = verification.summary;
   }
 
   return {
@@ -917,5 +965,6 @@ export async function collectInventory(
           })),
         }
       : {}),
+    ...(provenanceScan ? { provenanceScan } : {}),
   };
 }
