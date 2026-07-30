@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "project-tools": {
+      "command": "node",
+      "args": [
+        "./tools/project-server.mjs",
+        "--readonly"
+      ]
+    }
+  }
+}

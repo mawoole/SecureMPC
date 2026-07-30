@@ -2,6 +2,15 @@
 
 import { chmod, readFile, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import {
+  auditConfiguration,
+  createSarifReport,
+  type Severity,
+} from "../lib/audit-engine.ts";
+import {
+  evaluateSecurityGate,
+  formatSecurityGateSummary,
+} from "../lib/ci-gate.ts";
 import { collectInventory } from "../lib/collector.ts";
 import {
   parseOciVerificationPolicyDocument,
@@ -14,6 +23,8 @@ import { createCycloneDxReport } from "../lib/supply-chain.ts";
 
 type CliOptions = {
   additionalPaths: string[];
+  failOn?: Severity;
+  includeDefaultPaths: boolean;
   lockfilePaths: string[];
   output: string;
   ociBackend?: "cosign" | "github";
@@ -29,7 +40,9 @@ type CliOptions = {
   provenanceIdentity?: string;
   provenanceIssuer?: string;
   provenancePolicy?: ProvenancePolicy;
+  requireServers: boolean;
   scanLockfiles: boolean;
+  sarifOutput?: string;
   sbomOutput?: string;
   stdout: boolean;
   timeoutMs: number;
@@ -48,9 +61,11 @@ Usage:
   npm run collect -- --sbom
   npm run collect -- --osv --sbom
   npm run collect -- --path ./mcp.json --output ./mcp-inventory.json
+  npm run audit:ci -- --path ./.mcp.json --sarif
 
 Options:
   --path <fichier>       Ajoute une configuration JSON ou TOML explicite (répétable)
+  --no-default-paths     Ignore les configurations utilisateur et du workspace
   --workspace <dossier>  Dossier où rechercher .mcp.json, .vscode/mcp.json et .cursor/mcp.json
   --lockfile <fichier>    Ajoute un lockfile npm, pnpm, Yarn, uv ou Poetry
   --no-lockfiles          Désactive la découverte des lockfiles du workspace
@@ -72,6 +87,9 @@ Options:
   --oci-policy-file <fichier>
                          Applique plusieurs politiques OCI par préfixe d’image
   --sbom [fichier]       Produit aussi un SBOM CycloneDX 1.7
+  --sarif [fichier]      Produit un rapport SARIF (défaut : mcp-sentinel.sarif)
+  --fail-on <niveau>     Échoue sur critical, high ou medium et niveaux supérieurs
+  --require-servers      Échoue si aucun serveur MCP n’est découvert
   --timeout <ms>         Délai du probe, entre 500 et 15000 ms (défaut : 5000)
   --output <fichier>     Fichier produit (défaut : mcp-inventory.json)
   --stdout               Écrit l’inventaire sur la sortie standard
@@ -99,10 +117,12 @@ function readValue(args: string[], index: number, option: string): string {
 function parseArguments(args: string[]): CliOptions {
   const options: CliOptions = {
     additionalPaths: [],
+    includeDefaultPaths: true,
     lockfilePaths: [],
     output: resolve("mcp-inventory.json"),
     osv: false,
     probe: false,
+    requireServers: false,
     scanLockfiles: true,
     stdout: false,
     timeoutMs: 5_000,
@@ -122,6 +142,10 @@ function parseArguments(args: string[]): CliOptions {
     }
     if (argument === "--no-lockfiles") {
       options.scanLockfiles = false;
+      continue;
+    }
+    if (argument === "--no-default-paths") {
+      options.includeDefaultPaths = false;
       continue;
     }
     if (argument === "--osv") {
@@ -186,6 +210,31 @@ function parseArguments(args: string[]): CliOptions {
     }
     if (argument === "--stdout") {
       options.stdout = true;
+      continue;
+    }
+    if (argument === "--fail-on") {
+      const threshold = readValue(args, index, argument);
+      if (!["critical", "high", "medium"].includes(threshold)) {
+        throw new Error(
+          "--fail-on doit valoir critical, high ou medium.",
+        );
+      }
+      options.failOn = threshold as Severity;
+      index += 1;
+      continue;
+    }
+    if (argument === "--require-servers") {
+      options.requireServers = true;
+      continue;
+    }
+    if (argument === "--sarif") {
+      const candidate = args[index + 1];
+      if (candidate && !candidate.startsWith("--")) {
+        options.sarifOutput = resolve(candidate);
+        index += 1;
+      } else {
+        options.sarifOutput = resolve("mcp-sentinel.sarif");
+      }
       continue;
     }
     if (argument === "--sbom") {
@@ -315,6 +364,17 @@ function parseArguments(args: string[]): CliOptions {
       repository: options.ociRepository,
     };
   }
+
+  const outputs = [
+    ...(options.stdout ? [] : [options.output]),
+    ...(options.sbomOutput ? [options.sbomOutput] : []),
+    ...(options.sarifOutput ? [options.sarifOutput] : []),
+  ].map((filePath) => resolve(filePath).toLowerCase());
+  if (new Set(outputs).size !== outputs.length) {
+    throw new Error(
+      "Les sorties inventaire, SBOM et SARIF doivent utiliser des fichiers distincts.",
+    );
+  }
   return options;
 }
 
@@ -344,7 +404,10 @@ async function main() {
       options.ociPolicyFile,
     );
   }
-  const inventory = await collectInventory(options);
+  const inventory = await collectInventory({
+    ...options,
+    ...(options.includeDefaultPaths ? {} : { candidates: [] }),
+  });
 
   if (options.osv) {
     const componentCounts = inventory.servers.map(
@@ -363,6 +426,10 @@ async function main() {
   }
 
   const serialized = `${JSON.stringify(inventory, null, 2)}\n`;
+  const auditServers =
+    options.sarifOutput || options.failOn || options.requireServers
+      ? auditConfiguration(serialized)
+      : undefined;
 
   if (options.stdout) {
     process.stdout.write(serialized);
@@ -410,6 +477,24 @@ async function main() {
     }
   }
 
+  if (options.sarifOutput && auditServers) {
+    await writeFile(
+      options.sarifOutput,
+      `${JSON.stringify(
+        createSarifReport(auditServers, new Date(inventory.generatedAt)),
+        null,
+        2,
+      )}\n`,
+      {
+        encoding: "utf8",
+        mode: 0o600,
+      },
+    );
+    if (process.platform !== "win32") {
+      await chmod(options.sarifOutput, 0o600);
+    }
+  }
+
   const discovered = inventory.servers.length;
   const redactions = inventory.servers.reduce(
     (total, server) => total + server.redactions.length,
@@ -449,16 +534,29 @@ async function main() {
         : "Vérification OCI non demandée.",
       options.stdout ? "" : `Inventaire : ${options.output}`,
       options.sbomOutput ? `SBOM : ${options.sbomOutput}` : "",
+      options.sarifOutput ? `SARIF : ${options.sarifOutput}` : "",
     ]
       .filter(Boolean)
       .join(" "),
   );
   process.stderr.write("\n");
-  if (
+  const incomplete =
     inventory.vulnerabilityScan?.status === "error" ||
     inventory.provenanceScan?.status === "error" ||
-    inventory.ociVerification?.status === "error"
-  ) {
+    inventory.ociVerification?.status === "error";
+  const gate =
+    auditServers && (options.failOn || options.requireServers)
+      ? evaluateSecurityGate(auditServers, {
+          threshold: options.failOn,
+          requireServers: options.requireServers,
+        })
+      : undefined;
+  if (gate) {
+    process.stderr.write(`${formatSecurityGateSummary(gate)}\n`);
+  }
+  if (gate && !gate.passed) {
+    process.exitCode = 3;
+  } else if (incomplete) {
     process.exitCode = 2;
   }
 }

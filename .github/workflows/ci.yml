@@ -63,6 +63,13 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 
+      - name: Validate MCP security gate
+        run: |
+          npm run audit:ci -- \
+            --path ./examples/ci-safe-mcp.json \
+            --output ./.ci-mcp-inventory.json \
+            --sarif ./.ci-mcp-sentinel.sarif
+
       - name: Generate Kubernetes admission bundle
         run: |
           npm run generate:admission -- \
