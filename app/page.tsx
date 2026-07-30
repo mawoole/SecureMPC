@@ -661,44 +661,79 @@ export default function Home() {
     window.setTimeout(() => setToast(""), 3000);
   };
 
-  const exportReport = (format: "json" | "sarif" | "cyclonedx") => {
+  const exportReport = async (
+    format: "json" | "sarif" | "cyclonedx" | "pdf",
+  ) => {
     const generatedAt = new Date();
-    const report =
-      format === "sarif"
-        ? createGovernedSarifReport(servers, riskExceptions, generatedAt)
-        : format === "cyclonedx"
-          ? createCycloneDxReport(servers, generatedAt)
-          : createGovernedAuditReport(servers, riskExceptions, generatedAt);
-    const content = JSON.stringify(report, null, 2);
-    const blob = new Blob([content], {
-      type:
-        format === "sarif"
-          ? "application/sarif+json"
-          : format === "cyclonedx"
-            ? "application/vnd.cyclonedx+json"
-            : "application/json",
-    });
-    const downloadUrl = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    const date = generatedAt.toISOString().slice(0, 10);
-    link.href = downloadUrl;
-    link.download =
-      format === "cyclonedx"
-        ? `mcp-sentinel-${date}.cdx.json`
-        : `mcp-sentinel-${date}.${format}`;
-    link.click();
-    URL.revokeObjectURL(downloadUrl);
-    document
-      .querySelector<HTMLDetailsElement>(".export-menu[open]")
-      ?.removeAttribute("open");
-    setToast(
-      format === "sarif"
-        ? "Rapport SARIF exporté"
-        : format === "cyclonedx"
-          ? "SBOM CycloneDX exporté"
-          : "Rapport JSON exporté",
-    );
-    window.setTimeout(() => setToast(""), 2200);
+    try {
+      let blob: Blob;
+      let fileName: string;
+      let successMessage: string;
+
+      if (format === "pdf") {
+        setToast("Génération locale du rapport PDF…");
+        const { createAuditPdfReport } = await import("../lib/pdf-report");
+        const report = createAuditPdfReport(
+          servers,
+          riskExceptions,
+          generatedAt,
+        );
+        const pdfBuffer = report.bytes.buffer.slice(
+          report.bytes.byteOffset,
+          report.bytes.byteOffset + report.bytes.byteLength,
+        ) as ArrayBuffer;
+        blob = new Blob([pdfBuffer], { type: "application/pdf" });
+        fileName = report.fileName;
+        successMessage = `Rapport PDF exporté · ${report.pages} page${report.pages > 1 ? "s" : ""}`;
+      } else {
+        const report =
+          format === "sarif"
+            ? createGovernedSarifReport(servers, riskExceptions, generatedAt)
+            : format === "cyclonedx"
+              ? createCycloneDxReport(servers, generatedAt)
+              : createGovernedAuditReport(
+                  servers,
+                  riskExceptions,
+                  generatedAt,
+                );
+        const content = JSON.stringify(report, null, 2);
+        blob = new Blob([content], {
+          type:
+            format === "sarif"
+              ? "application/sarif+json"
+              : format === "cyclonedx"
+                ? "application/vnd.cyclonedx+json"
+                : "application/json",
+        });
+        const date = generatedAt.toISOString().slice(0, 10);
+        fileName =
+          format === "cyclonedx"
+            ? `mcp-sentinel-${date}.cdx.json`
+            : `mcp-sentinel-${date}.${format}`;
+        successMessage =
+          format === "sarif"
+            ? "Rapport SARIF exporté"
+            : format === "cyclonedx"
+              ? "SBOM CycloneDX exporté"
+              : "Rapport JSON exporté";
+      }
+
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = fileName;
+      link.click();
+      URL.revokeObjectURL(downloadUrl);
+      setToast(successMessage);
+      window.setTimeout(() => setToast(""), 2600);
+    } catch {
+      setToast("Le rapport n’a pas pu être généré sur cet appareil.");
+      window.setTimeout(() => setToast(""), 3500);
+    } finally {
+      document
+        .querySelector<HTMLDetailsElement>(".export-menu[open]")
+        ?.removeAttribute("open");
+    }
   };
 
   const navItems: { id: View; label: string; icon: string }[] = [
@@ -782,6 +817,13 @@ export default function Home() {
                 Exporter
               </summary>
               <div className="export-options">
+                <button onClick={() => exportReport("pdf")}>
+                  <span aria-hidden="true">▤</span>
+                  <span>
+                    <strong>Rapport PDF</strong>
+                    <small>Synthèse, risques et corrections</small>
+                  </span>
+                </button>
                 <button onClick={() => exportReport("json")}>
                   <span aria-hidden="true">{`{ }`}</span>
                   <span>

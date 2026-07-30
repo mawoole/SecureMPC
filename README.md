@@ -47,7 +47,7 @@ directement applicables.
 - priorisation par criticité ;
 - remédiations expliquées avec extraits de configuration copiables ;
 - exceptions de risque motivées, attribuées, datées et révocables ;
-- export de rapports JSON, SARIF et d’un SBOM CycloneDX 1.7 ;
+- export de rapports PDF, JSON, SARIF et d’un SBOM CycloneDX 1.7 ;
 - vues dédiées aux serveurs, règles et audits ;
 - interface responsive et accessible au clavier.
 
@@ -60,6 +60,7 @@ par un collecteur local explicite :
 - les valeurs sensibles détectées ne sont jamais affichées ;
 - aucun secret n’est enregistré dans le stockage du navigateur ;
 - le registre d’exceptions reste sur l’appareil dans le stockage du navigateur ;
+- le rapport PDF est composé et téléchargé localement, sans envoi du contenu ;
 - les secrets concrets sont remplacés par `${REDACTED}` avant l’écriture de
   l’inventaire ;
 - le collecteur ne lance jamais les commandes des serveurs `stdio` ;
@@ -137,6 +138,21 @@ Le registre est conservé uniquement dans le navigateur courant. Le rapport JSON
 1.1 inclut les exceptions actives, expirées et révoquées. L’export SARIF conserve
 le résultat et ajoute une suppression `external/accepted` documentée pour les
 seules exceptions actives.
+
+## Rapport PDF
+
+Le menu **Exporter > Rapport PDF** produit localement un document paginé prêt à
+partager avec les équipes sécurité et exploitation. Il contient :
+
+- la synthèse de posture et le score brut ;
+- l’inventaire des serveurs et leurs écarts ;
+- les risques classés par criticité avec leur correction concrète ;
+- les extraits de configuration corrigée ;
+- les exceptions actives, expirées ou révoquées ;
+- la méthodologie, les limites et la pagination.
+
+La bibliothèque PDF est chargée uniquement au moment de l’export afin de ne pas
+alourdir le chargement initial de l’application.
 
 Exemple minimal :
 
@@ -518,6 +534,7 @@ lib/
   kubernetes-admission-validation.ts Validation déterministe des bundles
   oci-provenance.ts Vérification OCI bornée via Cosign ou GitHub
   osv.ts           Client OSV limité aux PURL versionnés
+  pdf-report.ts    Composition locale du rapport PDF paginé
   provenance.ts    Signatures npm et attestations SLSA/Sigstore
   supply-chain.ts  Détection des composants et export CycloneDX
   workspaces.ts    Découverte bornée et sélection des packages monorepo
@@ -535,6 +552,7 @@ tests/
   lockfiles.test.ts        Tests des graphes npm, pnpm, Yarn, uv et Poetry
   oci-provenance.test.ts    Tests Cosign/GitHub, identité et digests OCI
   osv.test.ts              Tests du client OSV et de ses limites réseau
+  pdf-report.test.ts       Tests du document PDF et de sa pagination
   provenance.test.ts       Tests ECDSA, digest SLSA et politique Sigstore
   supply-chain.test.ts     Tests npm, PyPI, OCI, PURL et CycloneDX
   workspaces.test.ts       Tests de découverte et d’isolation des monorepos
@@ -606,7 +624,6 @@ l’application et vérifie le HTML produit.
 
 ## Prochaines étapes possibles
 
-- export d’un rapport PDF ;
 - historique persistant et suivi des écarts dans le temps ;
 - intégration CI pour bloquer les configurations à haut risque.
 

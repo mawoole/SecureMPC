@@ -38,6 +38,7 @@ test("server-renders the MCP Sentinel application", async () => {
   assert.match(html, /Vue d’ensemble/);
   assert.match(html, /Lancer un audit/);
   assert.match(html, /Exporter/);
+  assert.match(html, /Rapport PDF/);
   assert.match(html, /SBOM CycloneDX/);
   assert.doesNotMatch(html, developmentPreviewMeta);
   assert.doesNotMatch(html, /react-loading-skeleton/i);
@@ -57,6 +58,7 @@ test("keeps the audit engine separate from the interface", async () => {
     ociProvenance,
     osv,
     provenance,
+    pdfReport,
     workspaces,
     packageJson,
     ciWorkflow,
@@ -78,6 +80,7 @@ test("keeps the audit engine separate from the interface", async () => {
     readFile(new URL("../lib/oci-provenance.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/osv.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/provenance.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/pdf-report.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/workspaces.ts", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"),
@@ -109,6 +112,7 @@ test("keeps the audit engine separate from the interface", async () => {
   assert.match(page, /POLITIQUE ABSENTE/);
   assert.match(osv, /export async function scanComponentsWithOsv/);
   assert.match(provenance, /export async function verifyComponentProvenance/);
+  assert.match(pdfReport, /export function createAuditPdfReport/);
   assert.match(workspaces, /export async function discoverWorkspacePackages/);
   assert.match(page, /npm run collect:security/);
   assert.match(packageJson, /generate:admission/);
