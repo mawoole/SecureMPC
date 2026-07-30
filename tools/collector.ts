@@ -51,7 +51,7 @@ Usage:
 
 Options:
   --path <fichier>       Ajoute une configuration JSON ou TOML explicite (répétable)
-  --workspace <dossier>  Dossier où rechercher .vscode/mcp.json et .cursor/mcp.json
+  --workspace <dossier>  Dossier où rechercher .mcp.json, .vscode/mcp.json et .cursor/mcp.json
   --lockfile <fichier>    Ajoute un lockfile npm, pnpm, Yarn, uv ou Poetry
   --no-lockfiles          Désactive la découverte des lockfiles du workspace
   --probe                Vérifie passivement les endpoints HTTPS distants

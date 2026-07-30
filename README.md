@@ -36,7 +36,8 @@ directement applicables.
 - validation CI déterministe des bundles Kubernetes générés ;
 - recherche optionnelle des vulnérabilités connues via OSV.dev ;
 - prise en charge des objets JSON `mcpServers` utilisés par Claude Desktop,
-  Cursor et VS Code, ainsi que des tables TOML `mcp_servers` de Codex ;
+  Claude Code, Cursor et VS Code, ainsi que des tables TOML `mcp_servers` de
+  Codex ;
 - détection locale des secrets présents en clair ;
 - contrôle du chiffrement des transports distants ;
 - détection des shells intermédiaires et options dangereuses ;
@@ -189,7 +190,8 @@ Le fichier `mcp-inventory.json` est produit dans le dossier courant. Ouvrez
 ensuite **Découvrir** dans l’application et importez ce fichier. L’inventaire
 local est ignoré par Git afin d’éviter de publier des métadonnées
 d’infrastructure. Le collecteur détecte automatiquement la configuration Codex
-`~/.codex/config.toml` et ses tables `[mcp_servers.<nom>]`.
+`~/.codex/config.toml`, Claude Desktop classique ou Microsoft Store, ainsi que
+les portées utilisateur et locales de Claude Code dans `~/.claude.json`.
 
 Pour vérifier également les endpoints MCP distants :
 
@@ -212,7 +214,7 @@ npm run collect -- --path ./config/mcp.json
 # Ajouter explicitement une configuration Codex TOML
 npm run collect -- --path ~/.codex/config.toml
 
-# Limiter la recherche workspace à un autre projet
+# Rechercher aussi le .mcp.json d’un autre projet Claude Code
 npm run collect -- --workspace ../autre-projet
 
 # Adapter le délai réseau, au maximum 15 secondes
@@ -486,6 +488,10 @@ commande se termine avec le code `2`.
 | --- | --- | --- | --- |
 | Codex | `%USERPROFILE%\.codex\config.toml` | `~/.codex/config.toml` | `~/.codex/config.toml` |
 | Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` | `~/Library/Application Support/Claude/claude_desktop_config.json` | `~/.config/Claude/claude_desktop_config.json` |
+| Claude Desktop Microsoft Store | `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json` | — | — |
+| Claude Code utilisateur/local | `%USERPROFILE%\.claude.json` | `~/.claude.json` | `~/.claude.json` |
+| Claude Code projet | `.mcp.json` du workspace | idem | idem |
+| Claude Code administré | `%ProgramFiles%\ClaudeCode\managed-mcp.json` | `/Library/Application Support/ClaudeCode/managed-mcp.json` | `/etc/claude-code/managed-mcp.json` |
 | Cursor | `~/.cursor/mcp.json` | `~/.cursor/mcp.json` | `~/.cursor/mcp.json` |
 | VS Code | `%APPDATA%\Code\User\mcp.json` | `~/Library/Application Support/Code/User/mcp.json` | `~/.config/Code/User/mcp.json` |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` | idem | idem |
@@ -494,9 +500,14 @@ commande se termine avec le code `2`.
 Les fichiers `settings.json` de VS Code sont aussi inspectés lorsque présents.
 Les sous-tables Codex, notamment `[mcp_servers.<nom>.env]` et
 `[mcp_servers.<nom>.http_headers]`, sont rattachées au serveur puis assainies
-comme les objets JSON. Les chemins personnels sont normalisés avec `~` dans
-l’inventaire. Sous macOS et Linux, le fichier produit reçoit des permissions
-`0600`.
+comme les objets JSON. Pour `~/.claude.json`, les chemins des projets servent
+uniquement à produire des identifiants distincts et ne sont jamais écrits dans
+l’inventaire. Les chemins personnels sont normalisés avec `~` dans l’inventaire.
+Sous macOS et Linux, le fichier produit reçoit des permissions `0600`.
+
+Les connecteurs distants ajoutés au compte Claude sont gérés dans
+l’infrastructure Anthropic et ne sont pas présents dans ces fichiers locaux.
+Ils ne peuvent donc pas être inventoriés par le collecteur hors ligne.
 
 Le probe suit la version stable `2025-11-25` de la
 [spécification MCP](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)

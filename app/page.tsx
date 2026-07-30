@@ -1310,8 +1310,9 @@ export default function Home() {
 
             <ul className="collector-guarantees">
               <li>
-                Les configurations Codex TOML, Claude Desktop, Cursor, VS Code
-                et Windsurf sont découvertes automatiquement.
+                Les configurations Codex, Claude Desktop classique ou Microsoft
+                Store, Claude Code, Cursor, VS Code et Windsurf sont découvertes
+                automatiquement.
               </li>
               <li>Aucun serveur stdio et aucun outil MCP n’est exécuté.</li>
               <li>
@@ -1361,7 +1362,9 @@ export default function Home() {
             <p className="collector-help">
               Sans probe ni analyse OSV : <code>npm run collect</code>. Ajoutez{" "}
               <code>--path chemin/vers/config.toml</code> ou un fichier JSON
-              pour un emplacement personnalisé. Utilisez{" "}
+              pour un emplacement personnalisé. <code>--workspace</code>{" "}
+              sélectionne aussi le projet Claude dont le fichier{" "}
+              <code>.mcp.json</code> doit être lu. Utilisez{" "}
               <code>--oci-policy-file</code> pour plusieurs identités OCI et{" "}
               <code>npm run generate:admission</code> pour préparer leur
               application dans Kubernetes.

@@ -125,6 +125,7 @@ export type CandidateFile = {
   client: string;
   path: string;
   format?: "json" | "toml";
+  layout?: "standard" | "claude-code";
 };
 
 export type DiscoveryContext = {
@@ -211,6 +212,15 @@ export function discoverCandidateFiles(
       format: "toml",
     },
     {
+      client: "Claude Code",
+      path: pathApi.join(home, ".claude.json"),
+      layout: "claude-code",
+    },
+    {
+      client: "Claude Code (projet)",
+      path: pathApi.join(workspace, ".mcp.json"),
+    },
+    {
       client: "Workspace VS Code",
       path: pathApi.join(workspace, ".vscode", "mcp.json"),
     },
@@ -231,6 +241,9 @@ export function discoverCandidateFiles(
   if (platform === "win32") {
     const appData =
       environment.APPDATA ?? pathApi.join(home, "AppData", "Roaming");
+    const localAppData =
+      environment.LOCALAPPDATA ?? pathApi.join(home, "AppData", "Local");
+    const programFiles = environment.ProgramFiles ?? "C:\\Program Files";
     candidates.push(
       {
         client: "Claude Desktop",
@@ -238,6 +251,26 @@ export function discoverCandidateFiles(
           appData,
           "Claude",
           "claude_desktop_config.json",
+        ),
+      },
+      {
+        client: "Claude Desktop (Microsoft Store)",
+        path: pathApi.join(
+          localAppData,
+          "Packages",
+          "Claude_pzs8sxrjxfjjc",
+          "LocalCache",
+          "Roaming",
+          "Claude",
+          "claude_desktop_config.json",
+        ),
+      },
+      {
+        client: "Claude Code (administré)",
+        path: pathApi.join(
+          programFiles,
+          "ClaudeCode",
+          "managed-mcp.json",
         ),
       },
       {
@@ -262,6 +295,15 @@ export function discoverCandidateFiles(
           applicationSupport,
           "Claude",
           "claude_desktop_config.json",
+        ),
+      },
+      {
+        client: "Claude Code (administré)",
+        path: pathApi.join(
+          "/Library",
+          "Application Support",
+          "ClaudeCode",
+          "managed-mcp.json",
         ),
       },
       {
@@ -299,6 +341,14 @@ export function discoverCandidateFiles(
         ),
       },
       {
+        client: "Claude Code (administré)",
+        path: pathApi.join(
+          "/etc",
+          "claude-code",
+          "managed-mcp.json",
+        ),
+      },
+      {
         client: "VS Code",
         path: pathApi.join(configHome, "Code", "User", "mcp.json"),
       },
@@ -333,6 +383,80 @@ function extractServers(
       typeof candidate === "object" &&
       !Array.isArray(candidate),
   );
+}
+
+type CandidateServer = {
+  name: string;
+  value: Record<string, unknown>;
+  sourceClient: string;
+  scope: string;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function serversFromContainer(
+  container: Record<string, unknown> | undefined,
+  sourceClient: string,
+  scope: string,
+): CandidateServer[] {
+  if (!container) return [];
+  return Object.entries(container).flatMap(([name, value]) => {
+    const configuration = asRecord(value);
+    return configuration
+      ? [{ name, value: configuration, sourceClient, scope }]
+      : [];
+  });
+}
+
+function candidateLayout(
+  candidate: CandidateFile,
+): "standard" | "claude-code" {
+  return candidate.layout ??
+    (basename(candidate.path).toLowerCase() === ".claude.json"
+      ? "claude-code"
+      : "standard");
+}
+
+function extractCandidateServers(
+  parsed: Record<string, unknown>,
+  candidate: CandidateFile,
+): { recognized: boolean; servers: CandidateServer[] } {
+  if (candidateLayout(candidate) !== "claude-code") {
+    const container = extractServers(parsed);
+    return {
+      recognized: Boolean(container),
+      servers: serversFromContainer(
+        container,
+        candidate.client,
+        "configuration",
+      ),
+    };
+  }
+
+  const servers = serversFromContainer(
+    asRecord(parsed.mcpServers),
+    `${candidate.client} (utilisateur)`,
+    "user",
+  );
+  const projects = asRecord(parsed.projects);
+  if (projects) {
+    for (const [projectPath, projectValue] of Object.entries(projects)) {
+      const project = asRecord(projectValue);
+      servers.push(
+        ...serversFromContainer(
+          asRecord(project?.mcpServers),
+          `${candidate.client} (projet local)`,
+          `project:${projectPath}`,
+        ),
+      );
+    }
+  }
+
+  return { recognized: true, servers };
 }
 
 function redact(
@@ -740,9 +864,17 @@ function notRequestedProbe(now: () => Date): PassiveProbe {
   };
 }
 
-function stableServerId(sourcePath: string, name: string): string {
+function stableServerId(
+  sourcePath: string,
+  name: string,
+  scope = "configuration",
+): string {
+  const identity =
+    scope === "configuration"
+      ? `${resolve(sourcePath)}\0${name}`
+      : `${resolve(sourcePath)}\0${scope}\0${name}`;
   return createHash("sha256")
-    .update(`${resolve(sourcePath)}\0${name}`)
+    .update(identity)
     .digest("hex")
     .slice(0, 16);
 }
@@ -785,6 +917,9 @@ export async function collectInventory(
     format: extname(filePath).toLowerCase() === ".toml"
       ? "toml" as const
       : "json" as const,
+    layout: basename(filePath).toLowerCase() === ".claude.json"
+      ? "claude-code" as const
+      : "standard" as const,
   }));
   const candidates = deduplicateCandidates([...defaults, ...additional]);
   const sources: CollectorSource[] = [];
@@ -828,8 +963,8 @@ export async function collectInventory(
       continue;
     }
 
-    const container = extractServers(parsed);
-    if (!container) {
+    const extracted = extractCandidateServers(parsed, candidate);
+    if (!extracted.recognized) {
       sources.push({
         client: candidate.client,
         path: safePath,
@@ -841,11 +976,8 @@ export async function collectInventory(
     }
 
     let sourceServerCount = 0;
-    for (const [name, value] of Object.entries(container)) {
-      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-      const sanitized = sanitizeConfiguration(
-        value as Record<string, unknown>,
-      );
+    for (const entry of extracted.servers) {
+      const sanitized = sanitizeConfiguration(entry.value);
       const components = extractSupplyChainComponents(
         sanitized.configuration,
       );
@@ -858,10 +990,10 @@ export async function collectInventory(
         : notRequestedProbe(now);
 
       servers.push({
-        id: stableServerId(candidate.path, name),
-        name,
+        id: stableServerId(candidate.path, entry.name, entry.scope),
+        name: entry.name,
         source: {
-          client: candidate.client,
+          client: entry.sourceClient,
           path: safePath,
         },
         configuration: sanitized.configuration,
@@ -880,7 +1012,9 @@ export async function collectInventory(
       message:
         sourceServerCount > 0
           ? undefined
-          : "Le fichier ne contient aucun serveur valide.",
+          : candidateLayout(candidate) === "claude-code"
+            ? "Aucun serveur MCP configuré dans les portées utilisateur ou locales."
+            : "Le fichier ne contient aucun serveur valide.",
     });
   }
 
@@ -1025,7 +1159,7 @@ export async function collectInventory(
     generatedAt: now().toISOString(),
     collector: {
       name: "MCP Sentinel Collector",
-      version: "1.6.0",
+      version: "1.7.0",
       platform: options.platform ?? process.platform,
       security: {
         secretsRedacted: true,
