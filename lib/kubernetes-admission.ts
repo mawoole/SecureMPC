@@ -153,9 +153,9 @@ function cosignClusterImagePolicy(
     "metadata:",
     `  name: ${yamlString(name)}`,
     "  annotations:",
-    `    secure-mpc.dev/policy-id: ${yamlString(policy.id)}`,
-    `    secure-mpc.dev/image-prefix: ${yamlString(prefix)}`,
-    `    secure-mpc.dev/required-proof: ${yamlString(proof)}`,
+    `    mcp-trustmap.dev/policy-id: ${yamlString(policy.id)}`,
+    `    mcp-trustmap.dev/image-prefix: ${yamlString(prefix)}`,
+    `    mcp-trustmap.dev/required-proof: ${yamlString(proof)}`,
     "spec:",
     "  images:",
     ...imageGlobs(prefix).map((glob) => `  - glob: ${yamlString(glob)}`),
@@ -170,7 +170,7 @@ function githubValues(
   const prefix = normalizeOciImagePrefix(policy.imagePrefix);
   const [organization, repository] = policy.repository.split("/");
   return [
-    "# Généré par Secure MPC. Vérifiez ce fichier avant installation.",
+    "# Généré par MCP TrustMap. Vérifiez ce fichier avant installation.",
     "policy:",
     "  enabled: true",
     `  organization: ${yamlString(organization)}`,
@@ -214,7 +214,7 @@ function instructions(
       policy.kind === "github",
   );
   const lines = [
-    "# Admission Kubernetes générée par Secure MPC",
+    "# Admission Kubernetes générée par MCP TrustMap",
     "",
     "Ce dossier ne modifie aucun cluster. Contrôlez les manifestes dans un environnement de test avant l’activation en production.",
     "",

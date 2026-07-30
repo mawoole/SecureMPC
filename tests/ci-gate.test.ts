@@ -106,7 +106,7 @@ test("summary excludes configuration snippets and concrete secrets", () => {
 });
 
 test("collector CLI writes SARIF and returns code 3 for a blocked audit", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "secure-mpc-gate-"));
+  const directory = await mkdtemp(join(tmpdir(), "mcp-trustmap-gate-"));
   const configuration = join(directory, "unsafe.json");
   const inventory = join(directory, "inventory.json");
   const sarif = join(directory, "results.sarif");

@@ -103,7 +103,7 @@ export type CollectorInventory = {
   schemaVersion: typeof COLLECTOR_SCHEMA_VERSION;
   generatedAt: string;
   collector: {
-    name: "Secure MPC Collector";
+    name: "MCP TrustMap Collector";
     version: string;
     platform: NodeJS.Platform;
     security: {
@@ -752,7 +752,7 @@ export async function probeConfiguration(
           protocolVersion: MCP_PROTOCOL_VERSION,
           capabilities: {},
           clientInfo: {
-            name: "secure-mpc-collector",
+            name: "mcp-trustmap-collector",
             version: "1.5.0",
           },
         },
@@ -1158,7 +1158,7 @@ export async function collectInventory(
     schemaVersion: COLLECTOR_SCHEMA_VERSION,
     generatedAt: now().toISOString(),
     collector: {
-      name: "Secure MPC Collector",
+      name: "MCP TrustMap Collector",
       version: "1.8.0",
       platform: options.platform ?? process.platform,
       security: {

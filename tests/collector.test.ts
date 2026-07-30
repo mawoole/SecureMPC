@@ -148,7 +148,7 @@ test("redacts concrete credentials but preserves environment placeholders", () =
 });
 
 test("collects supported containers without retaining source secrets", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "secure-mpc-"));
+  const directory = await mkdtemp(join(tmpdir(), "mcp-trustmap-"));
   const configPath = join(directory, "mcp.json");
   const secret = "source-secret-that-must-not-leak";
 
@@ -205,7 +205,7 @@ test("collects supported containers without retaining source secrets", async () 
 });
 
 test("collects Codex TOML servers and redacts nested secrets", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "secure-mpc-codex-"));
+  const directory = await mkdtemp(join(tmpdir(), "mcp-trustmap-codex-"));
   const configPath = join(directory, "config.toml");
   const secret = "codex-secret-that-must-not-leak";
 
@@ -261,7 +261,7 @@ test("collects Codex TOML servers and redacts nested secrets", async () => {
 });
 
 test("collects Claude Code user and local project scopes", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "secure-mpc-claude-"));
+  const directory = await mkdtemp(join(tmpdir(), "mcp-trustmap-claude-"));
   const configPath = join(directory, ".claude.json");
   const secret = "claude-secret-that-must-not-leak";
 
@@ -336,7 +336,7 @@ test("collects Claude Code user and local project scopes", async () => {
 });
 
 test("accepts a Claude Code state file without configured MCP servers", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "secure-mpc-claude-empty-"));
+  const directory = await mkdtemp(join(tmpdir(), "mcp-trustmap-claude-empty-"));
   const configPath = join(directory, ".claude.json");
 
   try {
@@ -371,7 +371,7 @@ test("accepts a Claude Code state file without configured MCP servers", async ()
 });
 
 test("reports invalid TOML sources without exposing their contents", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "secure-mpc-toml-"));
+  const directory = await mkdtemp(join(tmpdir(), "mcp-trustmap-toml-"));
   const configPath = join(directory, "config.toml");
   const secret = "invalid-toml-content-must-not-leak";
 
@@ -398,7 +398,7 @@ test("reports invalid TOML sources without exposing their contents", async () =>
 });
 
 test("attaches workspace lockfile dependencies to matching MCP servers", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "secure-mpc-lock-"));
+  const directory = await mkdtemp(join(tmpdir(), "mcp-trustmap-lock-"));
   const configPath = join(directory, "mcp.json");
   try {
     await writeFile(

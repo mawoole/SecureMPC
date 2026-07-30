@@ -39,15 +39,18 @@ async function render() {
   }
 }
 
-test("server-renders the Secure MPC application", async () => {
+test("server-renders the MCP TrustMap application", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
   assert.match(html, /<html lang="fr">/i);
-  assert.match(html, /<title>Secure MPC — Audit de sécurité MCP<\/title>/i);
-  assert.match(html, /Secure MPC/);
+  assert.match(
+    html,
+    /<title>MCP TrustMap — Cartographie, audit et gouvernance MCP<\/title>/i,
+  );
+  assert.match(html, /MCP TrustMap/);
   assert.match(html, /Vue d’ensemble/);
   assert.match(html, /Lancer un audit/);
   assert.match(html, /Exporter/);
@@ -222,7 +225,10 @@ test("keeps the audit engine separate from the interface", async () => {
   assert.match(ciWorkflow, /npm run validate:admission/);
   assert.match(ciWorkflow, /npm audit --omit=dev --audit-level=high/);
   assert.match(ciWorkflow, /npm run audit:ci/);
-  assert.match(layout, /Secure MPC — Audit de sécurité MCP/);
+  assert.match(
+    layout,
+    /MCP TrustMap — Cartographie, audit et gouvernance MCP/,
+  );
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   let previewFiles = [];
   try {

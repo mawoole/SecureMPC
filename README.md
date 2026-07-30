@@ -1,14 +1,30 @@
-# Secure MPC
+# MCP TrustMap
 
 [![CI](https://github.com/mawoole/SecureMPC/actions/workflows/ci.yml/badge.svg)](https://github.com/mawoole/SecureMPC/actions/workflows/ci.yml)
 
-![Aperçu Secure MPC](public/og.png)
+![Aperçu MCP TrustMap](public/og.png)
 
-Secure MPC est une application web d’audit de configurations MCP
+MCP TrustMap est une application web d’audit de configurations MCP
 ([Model Context Protocol](https://modelcontextprotocol.io/)). Elle transforme un
 inventaire de serveurs difficile à relire en une posture de sécurité claire :
 score global, risques prioritaires, explication de l’impact et correctifs
 directement applicables.
+
+## Modules produit
+
+- **TrustMap Discover** construit la cartographie des serveurs, sources,
+  transports et composants découverts par le collecteur local ou par import.
+- **TrustMap Audit** applique le référentiel de sécurité, priorise les écarts,
+  fournit les correctifs, gère les exceptions et conserve l’historique agrégé.
+- **TrustMap CI** simule une politique sur l’inventaire courant et génère la
+  commande ainsi que le workflow GitHub Actions correspondant, avec SARIF,
+  CycloneDX, OSV et vérification de provenance configurables.
+- **TrustMap Enterprise** mesure la couverture des propriétaires et des preuves,
+  présente la posture par équipe et exporte un pack de gouvernance JSON.
+
+Les vues Enterprise reflètent uniquement les données réellement chargées.
+L’interface ne simule pas de SSO, de synchronisation multi-utilisateurs ni de
+connexion à un annuaire d’entreprise.
 
 > Le moteur actuel réalise une **analyse statique locale** des configurations.
 > Il ne remplace pas un test d’intrusion, une revue des permissions réellement
@@ -131,7 +147,7 @@ npm run build
 ## Exceptions de risque
 
 Une correction qui ne peut pas être appliquée immédiatement peut être placée
-sous exception depuis le détail de l’écart. Secure MPC exige :
+sous exception depuis le détail de l’écart. MCP TrustMap exige :
 
 - un motif explicite et, idéalement, une référence de suivi ;
 - un responsable identifié ;
@@ -248,7 +264,7 @@ npm run collect -- --sbom
 
 ### Inventaire supply chain et SBOM
 
-Secure MPC reconnaît les lanceurs suivants sans les exécuter :
+MCP TrustMap reconnaît les lanceurs suivants sans les exécuter :
 
 - npm : `npx`, `npm exec`, `pnpm dlx`, `yarn dlx` et `bunx` ;
 - Python : `uvx` et `pipx run` ;
@@ -317,7 +333,7 @@ et rattachés aux serveurs, directs comme transitifs :
 npm run collect -- --provenance
 ```
 
-Pour chaque composant, Secure MPC :
+Pour chaque composant, MCP TrustMap :
 
 1. exige que l’intégrité SRI du lockfile corresponde à `dist.integrity` ;
 2. vérifie la signature ECDSA du registre sur
@@ -415,7 +431,7 @@ la voie GitHub continue d’utiliser `gh`.
 
 Les références d’images peuvent être transmises au registre et au service de
 confiance choisi. Pour un registre privé, `cosign` ou `gh` peut réutiliser ses
-propres identifiants déjà configurés ; Secure MPC ne lit ni ne conserve ces
+propres identifiants déjà configurés ; MCP TrustMap ne lit ni ne conserve ces
 identifiants.
 
 ### Admission Kubernetes
@@ -643,7 +659,7 @@ ou élevé est détecté :
 ```bash
 npm run audit:ci -- \
   --path ./.mcp.json \
-  --sarif ./secure-mpc.sarif
+  --sarif ./mcp-trustmap.sarif
 ```
 
 Le seuil peut être adapté avec `--fail-on critical|high|medium`. Utilisez
@@ -669,10 +685,10 @@ steps:
   - name: Audit MCP
     run: npm run audit:ci -- --path ./.mcp.json --sarif
   - name: Publier le rapport SARIF
-    if: always() && hashFiles('secure-mpc.sarif') != ''
+    if: always() && hashFiles('mcp-trustmap.sarif') != ''
     uses: github/codeql-action/upload-sarif@v4
     with:
-      sarif_file: secure-mpc.sarif
+      sarif_file: mcp-trustmap.sarif
 ```
 
 Les codes de sortie sont stables : `0` pour un contrôle réussi, `1` pour une
