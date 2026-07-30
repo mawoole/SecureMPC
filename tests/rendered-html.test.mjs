@@ -49,6 +49,7 @@ test("keeps the audit engine separate from the interface", async () => {
     page,
     layout,
     auditEngine,
+    findingExceptions,
     supplyChain,
     lockfiles,
     kubernetesAdmission,
@@ -61,6 +62,7 @@ test("keeps the audit engine separate from the interface", async () => {
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/audit-engine.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/finding-exceptions.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/supply-chain.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/lockfiles.ts", import.meta.url), "utf8"),
     readFile(
@@ -75,10 +77,12 @@ test("keeps the audit engine separate from the interface", async () => {
   ]);
 
   assert.match(page, /from "\.\.\/lib\/audit-engine"/);
-  assert.match(page, /createAuditReport/);
-  assert.match(page, /createSarifReport/);
+  assert.match(page, /createGovernedAuditReport/);
+  assert.match(page, /createGovernedSarifReport/);
   assert.match(auditEngine, /export function auditConfiguration/);
   assert.match(auditEngine, /export function createSarifReport/);
+  assert.match(findingExceptions, /export function createRiskException/);
+  assert.match(findingExceptions, /status: "accepted" as const/);
   assert.match(supplyChain, /export function createCycloneDxReport/);
   assert.match(lockfiles, /export async function analyzeLockfile/);
   assert.match(lockfiles, /export function enrichComponentsFromLockfiles/);

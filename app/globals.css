@@ -481,6 +481,11 @@ textarea:focus-visible {
   color: var(--ink);
 }
 
+.button.compact {
+  min-height: 30px;
+  padding: 0 10px;
+}
+
 .button.ghost {
   background: transparent;
   border: 0;
@@ -511,7 +516,8 @@ textarea:focus-visible {
 .privacy-note,
 .rule-card,
 .trend-card,
-.timeline-card {
+.timeline-card,
+.exception-register {
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 13px;
@@ -1452,6 +1458,119 @@ button.table-row:hover {
   margin: 5px 0 0;
 }
 
+.exception-register {
+  margin-top: 13px;
+  padding: 23px;
+}
+
+.exception-register-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+}
+
+.exception-register-head h3 {
+  font-size: 17px;
+  letter-spacing: -0.035em;
+  margin: 4px 0 6px;
+}
+
+.exception-register-head p {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.55;
+  margin: 0;
+  max-width: 560px;
+}
+
+.exception-register-list {
+  border-top: 1px solid var(--line);
+  margin-top: 18px;
+}
+
+.exception-register-row {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  padding: 14px 0;
+}
+
+.exception-register-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.exception-register-row strong {
+  display: block;
+  font-size: 10px;
+}
+
+.exception-register-row p {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+  margin: 4px 0;
+}
+
+.exception-register-row small {
+  color: var(--subtle);
+  font-size: 8px;
+}
+
+.exception-status {
+  border-radius: 999px;
+  font-size: 7px;
+  font-weight: 750;
+  padding: 5px 8px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.exception-status.active {
+  background: var(--amber-soft);
+  color: #8d5a0f;
+}
+
+.exception-status.expired {
+  background: var(--coral-soft);
+  color: #a0352f;
+}
+
+.exception-status.revoked {
+  background: var(--paper-soft);
+  color: var(--muted);
+}
+
+.exception-register-empty {
+  align-items: center;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  margin-top: 18px;
+  padding: 25px;
+  text-align: center;
+}
+
+.exception-register-empty > span {
+  color: var(--amber);
+  font-size: 20px;
+}
+
+.exception-register-empty strong {
+  font-size: 10px;
+  margin-top: 5px;
+}
+
+.exception-register-empty p {
+  color: var(--muted);
+  font-size: 8px;
+  margin: 5px 0 0;
+}
+
 .modal-backdrop,
 .drawer-backdrop {
   align-items: center;
@@ -2127,6 +2246,10 @@ button.table-row:hover {
   overflow: hidden;
 }
 
+.drawer-finding.excepted {
+  border-color: #dfc58f;
+}
+
 .drawer-finding > button {
   align-items: center;
   background: #fbfaf6;
@@ -2149,6 +2272,15 @@ button.table-row:hover {
   color: var(--subtle);
   font-size: 7px;
   text-transform: uppercase;
+}
+
+.finding-exception-badge {
+  background: var(--amber-soft);
+  border-radius: 999px;
+  color: #8d5a0f;
+  display: inline-flex;
+  margin-left: 6px;
+  padding: 2px 5px;
 }
 
 .drawer-finding > button strong {
@@ -2243,6 +2375,147 @@ button.table-row:hover {
   position: absolute;
   right: 8px;
   top: 8px;
+}
+
+.finding-exception {
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-top: 10px;
+  padding: 11px;
+}
+
+.finding-exception.active {
+  background: var(--amber-soft);
+  border-color: #e6c985;
+}
+
+.finding-exception.expired {
+  background: var(--coral-soft);
+  border-color: #ecc1bc;
+}
+
+.finding-exception-head {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.finding-exception-head span {
+  color: var(--amber);
+  font-size: 7px;
+  font-weight: 760;
+  letter-spacing: 0.07em;
+}
+
+.finding-exception.expired .finding-exception-head span {
+  color: var(--coral);
+}
+
+.finding-exception-head strong {
+  font-size: 8px;
+}
+
+.finding-exception > p {
+  color: var(--ink);
+  font-size: 9px;
+  line-height: 1.5;
+  margin: 8px 0 5px;
+}
+
+.finding-exception > small {
+  color: var(--muted);
+  display: block;
+  font-size: 8px;
+}
+
+.exception-revoke,
+.exception-trigger {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  font-size: 8px;
+  font-weight: 680;
+  margin-top: 10px;
+  min-height: 31px;
+  padding: 0 10px;
+}
+
+.exception-revoke {
+  background: rgba(255, 255, 255, 0.55);
+  color: #8d5a0f;
+}
+
+.exception-trigger {
+  color: var(--muted);
+  width: 100%;
+}
+
+.exception-trigger:hover {
+  background: var(--paper-soft);
+  color: var(--ink);
+}
+
+.exception-form {
+  background: #fbfaf6;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  margin-top: 10px;
+  padding: 12px;
+}
+
+.exception-form > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.exception-form > div:first-child strong {
+  font-size: 11px;
+}
+
+.exception-form label {
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  font-size: 8px;
+  font-weight: 650;
+  gap: 5px;
+  margin-top: 11px;
+}
+
+.exception-form input,
+.exception-form textarea {
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  font-size: 9px;
+  font-weight: 450;
+  padding: 8px 9px;
+  resize: vertical;
+  width: 100%;
+}
+
+.exception-form-grid {
+  display: grid;
+  gap: 9px;
+  grid-template-columns: minmax(0, 1fr) 128px;
+}
+
+.exception-form-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 11px;
+}
+
+.exception-form > small {
+  color: var(--subtle);
+  display: block;
+  font-size: 7px;
+  line-height: 1.45;
+  margin-top: 9px;
 }
 
 .empty-success {
@@ -2526,6 +2799,20 @@ button.table-row:hover {
   .server-drawer {
     max-width: none;
     padding: 21px;
+  }
+
+  .exception-register-row {
+    align-items: flex-start;
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+
+  .exception-register-row .button {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .exception-form-grid {
+    grid-template-columns: 1fr;
   }
 }
 
