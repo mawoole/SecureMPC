@@ -13,16 +13,30 @@ import {
   mergeRiskExceptions,
 } from "../lib/trustmap-governance";
 
+export type SharedExceptionSyncState = {
+  phase: "connecting" | "syncing" | "synced" | "unavailable" | "error";
+  message: string;
+  identity?: string;
+  workspaceRef?: string;
+  kmsLabel?: string;
+  kmsKeyId?: string;
+  lastSyncedAt?: string | null;
+};
+
 export function TrustMapEnterprise({
   servers,
   exceptions,
   onNotify,
   onExceptionsImported,
+  sharedSync,
+  onSyncNow,
 }: {
   servers: McpServer[];
   exceptions: RiskException[];
   onNotify: (message: string) => void;
   onExceptionsImported: (exceptions: RiskException[]) => void;
+  sharedSync: SharedExceptionSyncState;
+  onSyncNow: () => void;
 }) {
   const [passphrase, setPassphrase] = useState("");
   const [encryptedBundle, setEncryptedBundle] = useState("");
@@ -203,6 +217,72 @@ export function TrustMapEnterprise({
           </button>
         </article>
       </div>
+      <article className="module-card automatic-sync-card">
+        <div className="module-card-head">
+          <div>
+            <span className="section-kicker">ESPACE PARTAGÉ · SSO</span>
+            <h3>Synchronisation automatique des décisions</h3>
+          </div>
+          <span className={`sync-state ${sharedSync.phase}`}>
+            <i aria-hidden="true" />
+            {sharedSync.phase === "synced"
+              ? "Synchronisé"
+              : sharedSync.phase === "syncing"
+                ? "Synchronisation"
+                : sharedSync.phase === "connecting"
+                  ? "Connexion"
+                  : "Indisponible"}
+          </span>
+        </div>
+        <p className="crypto-intro">
+          L’identité transmise par la plateforme attribue chaque modification.
+          Les exceptions sont chiffrées individuellement avant stockage avec
+          une clé de données enveloppée.
+        </p>
+        <div className="sync-facts">
+          <div>
+            <span>Identité SSO</span>
+            <strong>{sharedSync.identity || "Non authentifiée"}</strong>
+          </div>
+          <div>
+            <span>Espace</span>
+            <strong>
+              {sharedSync.workspaceRef
+                ? `…${sharedSync.workspaceRef}`
+                : "En attente"}
+            </strong>
+          </div>
+          <div>
+            <span>Gestion des clés</span>
+            <strong>{sharedSync.kmsLabel || "Non configurée"}</strong>
+            {sharedSync.kmsKeyId ? <small>{sharedSync.kmsKeyId}</small> : null}
+          </div>
+          <div>
+            <span>Dernière synchronisation</span>
+            <strong>
+              {sharedSync.lastSyncedAt
+                ? new Intl.DateTimeFormat("fr-FR", {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                  }).format(new Date(sharedSync.lastSyncedAt))
+                : "Aucune"}
+            </strong>
+          </div>
+        </div>
+        <div className="automatic-sync-footer">
+          <p role="status">{sharedSync.message}</p>
+          <button
+            className="button secondary"
+            disabled={
+              sharedSync.phase === "connecting" ||
+              sharedSync.phase === "syncing"
+            }
+            onClick={onSyncNow}
+          >
+            Synchroniser maintenant
+          </button>
+        </div>
+      </article>
       <article className="module-card exception-sync-card">
         <div className="module-card-head">
           <div>
@@ -287,8 +367,9 @@ export function TrustMapEnterprise({
         ) : null}
       </article>
       <p className="enterprise-note">
-        Cet échange de fichiers ne remplace pas une synchronisation automatique
-        multi-utilisateurs avec SSO, journal d’accès et révocation centralisée.
+        Le bundle reste disponible comme solution hors ligne. L’espace partagé
+        conserve uniquement des enveloppes chiffrées, des versions et un
+        journal pseudonymisé des écritures.
       </p>
     </section>
   );

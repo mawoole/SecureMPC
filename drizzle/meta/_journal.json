@@ -8,6 +8,13 @@
       "when": 1785402696389,
       "tag": "0000_tranquil_forge",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1785435768787,
+      "tag": "0001_slim_speed_demon",
+      "breakpoints": true
     }
   ]
 }

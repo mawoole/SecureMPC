@@ -16,6 +16,7 @@ export function getDb() {
 }
 
 let auditHistorySchemaReady: Promise<void> | undefined;
+let exceptionSyncSchemaReady: Promise<void> | undefined;
 
 export function ensureAuditHistorySchema(): Promise<void> {
   auditHistorySchemaReady ??= getD1()
@@ -47,4 +48,45 @@ export function ensureAuditHistorySchema(): Promise<void> {
       throw error;
     });
   return auditHistorySchemaReady;
+}
+
+export function ensureExceptionSyncSchema(): Promise<void> {
+  exceptionSyncSchemaReady ??= getD1()
+    .batch([
+      getD1().prepare(`
+        CREATE TABLE IF NOT EXISTS exception_sync_records (
+          record_key TEXT PRIMARY KEY NOT NULL,
+          space_id TEXT NOT NULL,
+          envelope TEXT NOT NULL,
+          actor_hash TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          version INTEGER NOT NULL
+        )
+      `),
+      getD1().prepare(`
+        CREATE INDEX IF NOT EXISTS exception_sync_space_updated_idx
+        ON exception_sync_records (space_id, updated_at)
+      `),
+      getD1().prepare(`
+        CREATE TABLE IF NOT EXISTS exception_sync_events (
+          id TEXT PRIMARY KEY NOT NULL,
+          space_id TEXT NOT NULL,
+          record_key TEXT NOT NULL,
+          actor_hash TEXT NOT NULL,
+          action TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          version INTEGER NOT NULL
+        )
+      `),
+      getD1().prepare(`
+        CREATE INDEX IF NOT EXISTS exception_sync_events_space_created_idx
+        ON exception_sync_events (space_id, created_at)
+      `),
+    ])
+    .then(() => undefined)
+    .catch((error) => {
+      exceptionSyncSchemaReady = undefined;
+      throw error;
+    });
+  return exceptionSyncSchemaReady;
 }

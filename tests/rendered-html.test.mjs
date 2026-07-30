@@ -21,6 +21,12 @@ function createWorker() {
     compatibilityDate: "2026-07-29",
     compatibilityFlags: ["nodejs_compat"],
     d1Databases: { DB: `render-test-${process.pid}-${Date.now()}` },
+    bindings: {
+      TRUSTMAP_KMS_KEY_ID: "render-test-key:v1",
+      TRUSTMAP_KMS_MASTER_KEY:
+        "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      TRUSTMAP_WORKSPACE_ID: "render-test-workspace",
+    },
   });
 }
 
@@ -133,6 +139,112 @@ test("persists aggregate audit history in the Worker runtime", async () => {
   }
 });
 
+test("synchronizes SSO-attributed exceptions as KMS envelopes", async () => {
+  const worker = createWorker();
+  try {
+    const exception = {
+      schemaVersion: "1.0",
+      id: "exception-sync-1",
+      serverId: "remote",
+      serverName: "Remote MCP",
+      findingId: "remote-transport",
+      rule: "MCP-NET-01",
+      findingTitle: "Transport non chiffré",
+      reason: "Migration TLS planifiée et suivie dans SEC-42.",
+      owner: "Équipe Platform",
+      createdAt: "2026-07-30T10:00:00.000Z",
+      expiresAt: "2026-08-15T23:59:59.999Z",
+    };
+    const unauthenticated = await worker.dispatchFetch(
+      "https://secure.example/api/exception-sync",
+    );
+    assert.equal(unauthenticated.status, 401);
+
+    const crossOrigin = await worker.dispatchFetch(
+      "http://localhost/api/exception-sync",
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "https://attacker.example",
+        },
+        body: JSON.stringify({ exceptions: [exception] }),
+      },
+    );
+    assert.equal(crossOrigin.status, 403);
+
+    const created = await worker.dispatchFetch(
+      "http://localhost/api/exception-sync",
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "http://localhost",
+        },
+        body: JSON.stringify({ exceptions: [exception] }),
+      },
+    );
+    const createdText = await created.text();
+    assert.equal(created.status, 200, createdText);
+    const createdBody = JSON.parse(createdText);
+    assert.equal(createdBody.changed, 1);
+    assert.equal(createdBody.exceptions.length, 1);
+    assert.equal(createdBody.sync.kms.keyId, "render-test-key:v1");
+    assert.equal(createdBody.sync.identity, "Aperçu local");
+
+    const revoked = {
+      ...exception,
+      revokedAt: "2026-08-01T08:00:00.000Z",
+    };
+    const updated = await worker.dispatchFetch(
+      "http://localhost/api/exception-sync",
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "http://localhost",
+        },
+        body: JSON.stringify({ exceptions: [revoked] }),
+      },
+    );
+    const updatedText = await updated.text();
+    assert.equal(updated.status, 200, updatedText);
+    const updatedBody = JSON.parse(updatedText);
+    assert.equal(updatedBody.exceptions[0].revokedAt, revoked.revokedAt);
+
+    const ssoListed = await worker.dispatchFetch(
+      "https://secure.example/api/exception-sync",
+      {
+        headers: {
+          "oai-authenticated-user-email": "auditor@example.test",
+          "oai-authenticated-user-full-name": "Auditrice%20MCP",
+          "oai-authenticated-user-full-name-encoding":
+            "percent-encoded-utf-8",
+        },
+      },
+    );
+    assert.equal(ssoListed.status, 200);
+    const ssoBody = await ssoListed.json();
+    assert.equal(ssoBody.sync.identity, "Auditrice MCP");
+    assert.equal(ssoBody.exceptions[0].revokedAt, revoked.revokedAt);
+
+    const database = await worker.getD1Database("DB");
+    const stored = await database
+      .prepare(
+        "SELECT record_key, envelope, actor_hash FROM exception_sync_records LIMIT 1",
+      )
+      .first();
+    assert.match(stored.record_key, /^record:[a-f0-9]{64}$/);
+    assert.match(stored.actor_hash, /^[a-f0-9]{64}$/);
+    assert.doesNotMatch(
+      stored.envelope,
+      /Remote MCP|SEC-42|exception-sync-1/u,
+    );
+  } finally {
+    await worker.dispose();
+  }
+});
+
 test("keeps the audit engine separate from the interface", async () => {
   const [
     page,
@@ -150,6 +262,9 @@ test("keeps the audit engine separate from the interface", async () => {
     workspaces,
     auditHistory,
     auditHistoryRoute,
+    exceptionSync,
+    exceptionSyncRoute,
+    keyManagement,
     packageJson,
     ciWorkflow,
   ] = await Promise.all([
@@ -177,6 +292,12 @@ test("keeps the audit engine separate from the interface", async () => {
       new URL("../app/api/audit-history/route.ts", import.meta.url),
       "utf8",
     ),
+    readFile(new URL("../lib/enterprise-sync.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../app/api/exception-sync/route.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(new URL("../lib/key-management.ts", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"),
   ]);
@@ -214,7 +335,13 @@ test("keeps the audit engine separate from the interface", async () => {
   assert.match(auditHistoryRoute, /oai-authenticated-user-email/);
   assert.match(auditHistoryRoute, /sameOrigin/);
   assert.doesNotMatch(auditHistoryRoute, /serverName|configuration|snippet/);
+  assert.match(exceptionSync, /encryptSyncedRiskException/);
+  assert.match(exceptionSyncRoute, /oai-authenticated-user-email/);
+  assert.match(exceptionSyncRoute, /sameOrigin/);
+  assert.match(keyManagement, /createKeyManagementProvider/);
+  assert.match(keyManagement, /AES-GCM/);
   assert.match(page, /\/api\/audit-history/);
+  assert.match(page, /\/api\/exception-sync/);
   assert.doesNotMatch(page, /branchement à un historique persistant/);
   assert.match(page, /npm run collect:security/);
   assert.match(page, /Claude Desktop classique ou Microsoft/);
