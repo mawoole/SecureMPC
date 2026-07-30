@@ -580,11 +580,16 @@ app/
   page.tsx       Interface et orchestration des audits
   globals.css    Système visuel responsive
   layout.tsx     Métadonnées et partage social
+  api/exception-sync/route.ts Synchronisation SSO et journal d’écriture
+db/
+  schema.ts      Historique et enveloppes d’exceptions dans D1
 lib/
   audit-engine.ts  Règles, scoring et exports JSON/SARIF
   audit-history.ts Agrégation confidentielle et comparaison des audits
   finding-exceptions.ts Registre local et exports des risques acceptés
   trustmap-governance.ts Signature des politiques et bundles d’exceptions chiffrés
+  enterprise-sync.ts Chiffrement par clé de données et pseudonymisation
+  key-management.ts Enveloppe de clés Sites ou passerelle KMS HTTPS
   collector.ts     Découverte, redaction et probe MCP passif
   lockfiles.ts     Graphes package-lock, pnpm, Yarn, uv et Poetry
   kubernetes-admission.ts Génération sûre des politiques d’admission
@@ -612,6 +617,7 @@ tests/
   pdf-report.test.ts       Tests du document PDF et de sa pagination
   provenance.test.ts       Tests ECDSA, digest SLSA et politique Sigstore
   supply-chain.test.ts     Tests npm, PyPI, OCI, PURL et CycloneDX
+  enterprise-sync.test.ts Tests de chiffrement par enveloppe et rotation
   trustmap-governance.test.ts Tests des signatures et échanges chiffrés
   workspaces.test.ts       Tests de découverte et d’isolation des monorepos
   rendered-html.test.mjs   Tests du rendu de production
@@ -754,6 +760,45 @@ fusion. Les décisions sont rapprochées par identifiant et une révocation gagn
 toujours sur une version active, ce qui évite de réactiver un risque déjà
 refusé. Aucune phrase secrète n’est persistée par l’application.
 
+### Synchronisation automatique avec SSO et KMS
+
+Dans **TrustMap Enterprise → Espace partagé**, le navigateur se connecte à
+`/api/exception-sync`. L’API accepte uniquement une identité transmise par la
+plateforme dans l’en-tête authentifié, ou l’identité spéciale de l’aperçu local.
+Chaque écriture est attribuée à une empreinte SHA-256 pseudonymisée ; l’adresse
+e-mail n’est pas inscrite dans D1.
+
+Un site privé représente un espace de confiance. Les membres explicitement
+autorisés par la politique d’accès Sites partagent le même registre. La
+synchronisation :
+
+- fusionne les décisions sans supprimer celles absentes d’un appareil ;
+- donne toujours priorité à une révocation ;
+- utilise une mise à jour optimiste versionnée pour éviter les écrasements
+  concurrents ;
+- conserve les 500 événements d’écriture les plus récents sans nom de serveur,
+  règle, motif ou autre contenu métier en clair.
+
+Chaque exception est chiffrée avec une clé de données AES-256-GCM indépendante.
+La clé de données est ensuite enveloppée par le fournisseur de clés configuré.
+D1 ne reçoit que l’enveloppe, une clé d’enregistrement pseudonymisée, la version,
+la date et l’empreinte de l’acteur.
+
+Deux fournisseurs sont disponibles :
+
+1. **secret de plateforme**, utilisé par le site privé actuel : une clé
+   d’enveloppe de 32 octets est stockée comme secret Sites ;
+2. **passerelle KMS externe**, qui reçoit des opérations `wrap` et `unwrap` sur
+   HTTPS avec un identifiant de clé et un jeton conservé comme secret.
+
+La rotation change simultanément `TRUSTMAP_KMS_KEY_ID` et la clé courante. Le
+secret JSON `TRUSTMAP_KMS_PREVIOUS_KEYS` peut contenir au maximum dix anciennes
+versions le temps de relire les enregistrements existants. Chaque
+synchronisation réenveloppe automatiquement une décision encore protégée par
+une ancienne version. Les
+variables attendues et leurs formes sont documentées dans `.env.example` sans
+aucune valeur secrète.
+
 ## Limites actuelles
 
 - la découverte doit être lancée explicitement sur chaque poste à inventorier ;
@@ -779,9 +824,10 @@ refusé. Aucune phrase secrète n’est persistée par l’application.
   OAuth ou système de fichiers ;
 - l’historique est limité à 60 synthèses agrégées et ne permet pas de rouvrir
   l’inventaire complet d’un audit précédent ;
-- le registre d’exceptions reste local au navigateur ; sa synchronisation
-  s’effectue volontairement par échange de bundles chiffrés et n’est pas encore
-  automatique ;
+- la politique d’accès Sites définit les membres de l’espace ; l’application ne
+  fournit pas encore d’interface d’invitation ou de gestion des rôles ;
+- la passerelle KMS externe suit le contrat HTTPS MCP TrustMap et nécessite un
+  adaptateur devant AWS KMS, Azure Key Vault, Google Cloud KMS ou un HSM ;
 - l’empreinte d’une identité de signature doit être validée par un canal
   distinct ; un fichier auto-signé ne constitue pas à lui seul une identité de
   confiance ;
@@ -789,9 +835,10 @@ refusé. Aucune phrase secrète n’est persistée par l’application.
 
 ## Prochaines étapes possibles
 
-- synchronisation automatique des exceptions avec SSO, journal d’accès et
-  révocation centralisée ;
-- clés de signature matérielles ou gérées par un KMS d’entreprise.
+- rôles distincts lecteur, auditeur et administrateur avec approbation à deux
+  personnes pour les exceptions critiques ;
+- adaptateurs KMS natifs et migration automatique lors de la rotation ;
+- clés de signature matérielles WebAuthn ou gérées par un HSM d’entreprise.
 
 ## Contribution
 

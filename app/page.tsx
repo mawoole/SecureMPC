@@ -45,7 +45,11 @@ import {
 import { AuditHistoryView } from "./audit-history-view";
 import { TrustMapDiscover } from "./trustmap-discover";
 import { TrustMapCi } from "./trustmap-ci";
-import { TrustMapEnterprise } from "./trustmap-enterprise";
+import {
+  TrustMapEnterprise,
+  type SharedExceptionSyncState,
+} from "./trustmap-enterprise";
+import { mergeRiskExceptions } from "../lib/trustmap-governance";
 
 type View = "discover" | "audit" | "ci" | "enterprise";
 type AuditView = "overview" | "servers" | "rules" | "history";
@@ -419,6 +423,13 @@ export default function Home() {
   const [auditHistory, setAuditHistory] = useState<AuditHistoryRecord[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState("");
+  const [exceptionSyncReady, setExceptionSyncReady] = useState(false);
+  const [exceptionSyncRequest, setExceptionSyncRequest] = useState(0);
+  const [sharedExceptionSync, setSharedExceptionSync] =
+    useState<SharedExceptionSyncState>({
+      phase: "connecting",
+      message: "Connexion à l’espace chiffré…",
+    });
 
   useEffect(() => {
     const loadTimer = window.setTimeout(() => {
@@ -470,6 +481,157 @@ export default function Home() {
       return () => window.clearTimeout(errorTimer);
     }
   }, [exceptionsLoaded, riskExceptions]);
+
+  useEffect(() => {
+    if (!exceptionsLoaded) return;
+    const controller = new AbortController();
+    const connectSharedRegister = async () => {
+      setExceptionSyncReady(false);
+      setSharedExceptionSync((current) => ({
+        ...current,
+        phase: "connecting",
+        message: "Connexion SSO à l’espace chiffré…",
+      }));
+      try {
+        const response = await fetch("/api/exception-sync", {
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+          signal: controller.signal,
+        });
+        const body = (await response.json()) as {
+          error?: string;
+          exceptions?: unknown;
+          lastSyncedAt?: string | null;
+          sync?: {
+            identity?: string;
+            workspaceRef?: string;
+            kms?: { label?: string; keyId?: string };
+          };
+        };
+        if (!response.ok) {
+          throw new Error(
+            body.error || "L’espace partagé n’est pas disponible.",
+          );
+        }
+        const candidates = Array.isArray(body.exceptions)
+          ? body.exceptions
+          : [];
+        const remote = parseRiskExceptions(JSON.stringify(candidates));
+        if (remote.length !== candidates.length) {
+          throw new Error("Le registre partagé reçu est invalide.");
+        }
+        setRiskExceptions((current) => {
+          const merged = mergeRiskExceptions(current, remote);
+          return JSON.stringify(merged) === JSON.stringify(current)
+            ? current
+            : merged;
+        });
+        setSharedExceptionSync({
+          phase: "synced",
+          message: "Session SSO vérifiée. Le registre local est à jour.",
+          identity: body.sync?.identity,
+          workspaceRef: body.sync?.workspaceRef,
+          kmsLabel: body.sync?.kms?.label,
+          kmsKeyId: body.sync?.kms?.keyId,
+          lastSyncedAt: body.lastSyncedAt,
+        });
+        setExceptionSyncReady(true);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        setSharedExceptionSync((current) => ({
+          ...current,
+          phase: "unavailable",
+          message:
+            error instanceof Error
+              ? error.message
+              : "L’espace partagé n’est pas disponible.",
+        }));
+      }
+    };
+    void connectSharedRegister();
+    return () => controller.abort();
+  }, [exceptionSyncRequest, exceptionsLoaded]);
+
+  useEffect(() => {
+    if (!exceptionSyncReady) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      const synchronize = async () => {
+        setSharedExceptionSync((current) => ({
+          ...current,
+          phase: "syncing",
+          message: "Chiffrement et synchronisation des décisions…",
+        }));
+        try {
+          const response = await fetch("/api/exception-sync", {
+            method: "PUT",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ exceptions: riskExceptions }),
+            signal: controller.signal,
+          });
+          const body = (await response.json()) as {
+            error?: string;
+            exceptions?: unknown;
+            lastSyncedAt?: string | null;
+            sync?: {
+              identity?: string;
+              workspaceRef?: string;
+              kms?: { label?: string; keyId?: string };
+            };
+          };
+          if (!response.ok) {
+            throw new Error(
+              body.error || "La synchronisation automatique a échoué.",
+            );
+          }
+          const candidates = Array.isArray(body.exceptions)
+            ? body.exceptions
+            : [];
+          const remote = parseRiskExceptions(JSON.stringify(candidates));
+          if (remote.length !== candidates.length) {
+            throw new Error("Le registre partagé reçu est invalide.");
+          }
+          setRiskExceptions((current) => {
+            const merged = mergeRiskExceptions(current, remote);
+            return JSON.stringify(merged) === JSON.stringify(current)
+              ? current
+              : merged;
+          });
+          setSharedExceptionSync({
+            phase: "synced",
+            message: "Toutes les décisions sont chiffrées et synchronisées.",
+            identity: body.sync?.identity,
+            workspaceRef: body.sync?.workspaceRef,
+            kmsLabel: body.sync?.kms?.label,
+            kmsKeyId: body.sync?.kms?.keyId,
+            lastSyncedAt: body.lastSyncedAt ?? new Date().toISOString(),
+          });
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            return;
+          }
+          setSharedExceptionSync((current) => ({
+            ...current,
+            phase: "error",
+            message:
+              error instanceof Error
+                ? error.message
+                : "La synchronisation automatique a échoué.",
+          }));
+        }
+      };
+      void synchronize();
+    }, 800);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [exceptionSyncReady, riskExceptions]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1336,6 +1498,10 @@ export default function Home() {
             exceptions={riskExceptions}
             onNotify={notify}
             onExceptionsImported={setRiskExceptions}
+            sharedSync={sharedExceptionSync}
+            onSyncNow={() => {
+              setExceptionSyncRequest((current) => current + 1);
+            }}
           />
         )}
       </main>
