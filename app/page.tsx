@@ -1,11 +1,15 @@
 "use client";
 
-import { ChangeEvent, CSSProperties, useMemo, useState } from "react";
+import {
+  ChangeEvent,
+  CSSProperties,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   auditConfiguration,
   calculateAuditMetrics,
-  createAuditReport,
-  createSarifReport,
   SECURITY_RULES,
   type Finding,
   type McpServer,
@@ -14,11 +18,52 @@ import {
   type Severity,
 } from "../lib/audit-engine";
 import {
+  createGovernedAuditReport,
+  createGovernedSarifReport,
+  createRiskException,
+  findActiveRiskException,
+  findLatestRiskException,
+  findingExceptionKey,
+  openFindingEntries,
+  parseRiskExceptions,
+  revokeRiskException,
+  riskExceptionStatus,
+  type RiskException,
+} from "../lib/finding-exceptions";
+import {
   createCycloneDxReport,
   type ComponentPinStatus,
 } from "../lib/supply-chain";
 
 type View = "overview" | "servers" | "rules" | "history";
+
+type ExceptionDraft = {
+  findingKey: string;
+  reason: string;
+  owner: string;
+  expiresOn: string;
+  minimumExpiresOn: string;
+  maximumExpiresOn: string;
+};
+
+const RISK_EXCEPTIONS_STORAGE_KEY = "mcp-sentinel.risk-exceptions.v1";
+
+function dateInputValue(date: Date): string {
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
+}
+
+function defaultExceptionExpiry(): string {
+  return dateInputValue(new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000));
+}
+
+function formatExceptionDate(value: string): string {
+  return new Intl.DateTimeFormat("fr-FR", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(new Date(value));
+}
 
 const severityLabel: Record<Severity, string> = {
   critical: "Critique",
@@ -348,8 +393,76 @@ export default function Home() {
   const [scanning, setScanning] = useState(false);
   const [toast, setToast] = useState("");
   const [lastAudit, setLastAudit] = useState("Aujourd’hui, 14:32");
+  const [riskExceptions, setRiskExceptions] = useState<RiskException[]>([]);
+  const [exceptionsLoaded, setExceptionsLoaded] = useState(false);
+  const [exceptionDraft, setExceptionDraft] =
+    useState<ExceptionDraft | null>(null);
+  const [exceptionError, setExceptionError] = useState("");
+
+  useEffect(() => {
+    const loadTimer = window.setTimeout(() => {
+      setRiskExceptions(
+        parseRiskExceptions(
+          window.localStorage.getItem(RISK_EXCEPTIONS_STORAGE_KEY),
+        ),
+      );
+      setExceptionsLoaded(true);
+    }, 0);
+    return () => window.clearTimeout(loadTimer);
+  }, []);
+
+  useEffect(() => {
+    if (!exceptionsLoaded) return;
+    try {
+      window.localStorage.setItem(
+        RISK_EXCEPTIONS_STORAGE_KEY,
+        JSON.stringify(riskExceptions),
+      );
+    } catch {
+      const errorTimer = window.setTimeout(
+        () =>
+          setToast(
+            "Le registre d’exceptions n’a pas pu être enregistré sur cet appareil.",
+          ),
+        0,
+      );
+      return () => window.clearTimeout(errorTimer);
+    }
+  }, [exceptionsLoaded, riskExceptions]);
 
   const metrics = useMemo(() => calculateAuditMetrics(servers), [servers]);
+  const actionableFindings = useMemo(
+    () => openFindingEntries(servers, riskExceptions),
+    [riskExceptions, servers],
+  );
+  const actionableCritical = useMemo(
+    () =>
+      actionableFindings.filter(
+        ({ finding }) => finding.severity === "critical",
+      ).length,
+    [actionableFindings],
+  );
+  const activeExceptionCount = useMemo(
+    () =>
+      riskExceptions.filter(
+        (exception) => riskExceptionStatus(exception) === "active",
+      ).length,
+    [riskExceptions],
+  );
+  const exceptionRegister = useMemo(
+    () =>
+      riskExceptions
+        .map((exception) => ({
+          exception,
+          status: riskExceptionStatus(exception),
+        }))
+        .sort(
+          (left, right) =>
+            Date.parse(right.exception.createdAt) -
+            Date.parse(left.exception.createdAt),
+        ),
+    [riskExceptions],
+  );
 
   const filteredServers = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
@@ -364,10 +477,7 @@ export default function Home() {
 
   const priorityFindings = useMemo(
     () =>
-      servers
-        .flatMap((server) =>
-          server.findings.map((finding) => ({ server, finding })),
-        )
+      [...actionableFindings]
         .sort((a, b) => {
           const order: Record<Severity, number> = {
             critical: 0,
@@ -376,7 +486,7 @@ export default function Home() {
           };
           return order[a.finding.severity] - order[b.finding.severity];
         }),
-    [servers],
+    [actionableFindings],
   );
 
   const runAudit = () => {
@@ -484,14 +594,81 @@ export default function Home() {
     window.setTimeout(() => setToast(""), 2200);
   };
 
+  const openExceptionForm = (server: McpServer, finding: Finding) => {
+    const openedAt = new Date();
+    setExceptionDraft({
+      findingKey: findingExceptionKey(server, finding),
+      reason: "",
+      owner: server.owner === "Non attribué" ? "" : server.owner,
+      expiresOn: defaultExceptionExpiry(),
+      minimumExpiresOn: dateInputValue(
+        new Date(openedAt.getTime() + 24 * 60 * 60 * 1_000),
+      ),
+      maximumExpiresOn: dateInputValue(
+        new Date(openedAt.getTime() + 366 * 24 * 60 * 60 * 1_000),
+      ),
+    });
+    setExceptionError("");
+  };
+
+  const saveRiskException = (server: McpServer, finding: Finding) => {
+    if (!exceptionDraft) return;
+    setExceptionError("");
+
+    if (findActiveRiskException(server, finding, riskExceptions)) {
+      setExceptionError("Une exception active existe déjà pour cet écart.");
+      return;
+    }
+
+    try {
+      const expiration = new Date(
+        `${exceptionDraft.expiresOn}T23:59:59.999`,
+      );
+      const created = createRiskException({
+        id: window.crypto.randomUUID(),
+        server,
+        finding,
+        reason: exceptionDraft.reason,
+        owner: exceptionDraft.owner,
+        expiresAt: expiration.toISOString(),
+      });
+      setRiskExceptions((current) => [...current, created]);
+      setExceptionDraft(null);
+      setToast(
+        `Exception documentée jusqu’au ${formatExceptionDate(created.expiresAt)}`,
+      );
+      window.setTimeout(() => setToast(""), 3000);
+    } catch (error) {
+      setExceptionError(
+        error instanceof Error
+          ? error.message
+          : "L’exception n’a pas pu être enregistrée.",
+      );
+    }
+  };
+
+  const revokeException = (exceptionId: string) => {
+    setRiskExceptions((current) =>
+      current.map((exception) =>
+        exception.id === exceptionId
+          ? revokeRiskException(exception)
+          : exception,
+      ),
+    );
+    setExceptionDraft(null);
+    setExceptionError("");
+    setToast("Exception révoquée — l’écart redevient prioritaire");
+    window.setTimeout(() => setToast(""), 3000);
+  };
+
   const exportReport = (format: "json" | "sarif" | "cyclonedx") => {
     const generatedAt = new Date();
     const report =
       format === "sarif"
-        ? createSarifReport(servers, generatedAt)
+        ? createGovernedSarifReport(servers, riskExceptions, generatedAt)
         : format === "cyclonedx"
           ? createCycloneDxReport(servers, generatedAt)
-          : createAuditReport(servers, generatedAt);
+          : createGovernedAuditReport(servers, riskExceptions, generatedAt);
     const content = JSON.stringify(report, null, 2);
     const blob = new Blob([content], {
       type:
@@ -675,9 +852,9 @@ export default function Home() {
                     </h2>
                   </div>
                   <p>
-                    {metrics.critical
-                      ? `${metrics.critical} risques critiques nécessitent une action immédiate.`
-                      : "Aucun risque critique détecté sur la configuration actuelle."}
+                    {actionableCritical
+                      ? `${actionableCritical} risques critiques nécessitent une action immédiate.`
+                      : "Aucun risque critique sans exception active sur la configuration actuelle."}
                   </p>
                 </div>
                 <div
@@ -722,9 +899,13 @@ export default function Home() {
                   </div>
                   <div>
                     <span>Risques critiques</span>
-                    <strong>{metrics.critical}</strong>
+                    <strong>{actionableCritical}</strong>
                   </div>
-                  <small>Action immédiate</small>
+                  <small>
+                    {activeExceptionCount
+                      ? `${activeExceptionCount} sous exception`
+                      : "Action immédiate"}
+                  </small>
                 </article>
               </div>
             </section>
@@ -742,7 +923,7 @@ export default function Home() {
               />
               <RemediationPanel
                 items={priorityFindings.slice(0, 4)}
-                total={metrics.toFix}
+                total={actionableFindings.length}
                 onSelect={(server, finding) => {
                   setSelectedServer(server);
                   setSelectedFinding(finding);
@@ -879,7 +1060,7 @@ export default function Home() {
                   {
                     date: "Aujourd’hui",
                     title: "Audit complet du parc",
-                    text: `${servers.length} serveurs · ${metrics.toFix} corrections ouvertes`,
+                    text: `${servers.length} serveurs · ${actionableFindings.length} corrections ouvertes`,
                     tone: "green",
                   },
                   {
@@ -912,6 +1093,62 @@ export default function Home() {
                 ))}
               </div>
             </div>
+            <article className="exception-register">
+              <div className="exception-register-head">
+                <div>
+                  <span className="section-kicker">REGISTRE LOCAL</span>
+                  <h3>Exceptions de risque</h3>
+                  <p>
+                    Chaque acceptation est motivée, attribuée et limitée dans
+                    le temps. Le score brut continue de refléter le risque.
+                  </p>
+                </div>
+                <span className="count-badge">{activeExceptionCount}</span>
+              </div>
+              {exceptionRegister.length ? (
+                <div className="exception-register-list">
+                  {exceptionRegister.map(({ exception, status }) => (
+                    <div className="exception-register-row" key={exception.id}>
+                      <span className={`exception-status ${status}`}>
+                        {status === "active"
+                          ? "Active"
+                          : status === "expired"
+                            ? "Expirée"
+                            : "Révoquée"}
+                      </span>
+                      <div>
+                        <strong>
+                          {exception.serverName} · {exception.findingTitle}
+                        </strong>
+                        <p>{exception.reason}</p>
+                        <small>
+                          {exception.owner} · créée le{" "}
+                          {formatExceptionDate(exception.createdAt)} · expire le{" "}
+                          {formatExceptionDate(exception.expiresAt)}
+                        </small>
+                      </div>
+                      {status === "active" ? (
+                        <button
+                          className="button secondary compact"
+                          onClick={() => revokeException(exception.id)}
+                        >
+                          Révoquer
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="exception-register-empty">
+                  <span aria-hidden="true">◎</span>
+                  <strong>Aucune exception enregistrée</strong>
+                  <p>
+                    Ouvrez un écart depuis un serveur pour documenter une
+                    acceptation temporaire.
+                  </p>
+                </div>
+              )}
+            </article>
           </section>
         )}
       </main>
@@ -1094,6 +1331,8 @@ export default function Home() {
             if (event.target === event.currentTarget) {
               setSelectedServer(null);
               setSelectedFinding(null);
+              setExceptionDraft(null);
+              setExceptionError("");
             }
           }}
         >
@@ -1109,6 +1348,8 @@ export default function Home() {
               onClick={() => {
                 setSelectedServer(null);
                 setSelectedFinding(null);
+                setExceptionDraft(null);
+                setExceptionError("");
               }}
             >
               ×
@@ -1371,9 +1612,30 @@ export default function Home() {
               <div className="drawer-findings">
                 {selectedServer.findings.map((finding) => {
                   const expanded = selectedFinding?.id === finding.id;
+                  const activeException = findActiveRiskException(
+                    selectedServer,
+                    finding,
+                    riskExceptions,
+                  );
+                  const latestException =
+                    activeException ??
+                    findLatestRiskException(
+                      selectedServer,
+                      finding,
+                      riskExceptions,
+                    );
+                  const latestExceptionStatus = latestException
+                    ? riskExceptionStatus(latestException)
+                    : undefined;
+                  const currentFindingKey = findingExceptionKey(
+                    selectedServer,
+                    finding,
+                  );
+                  const exceptionFormOpen =
+                    exceptionDraft?.findingKey === currentFindingKey;
                   return (
                     <article
-                      className={`drawer-finding ${expanded ? "expanded" : ""}`}
+                      className={`drawer-finding ${expanded ? "expanded" : ""} ${activeException ? "excepted" : ""}`}
                       key={finding.id}
                     >
                       <button
@@ -1388,6 +1650,11 @@ export default function Home() {
                         <span>
                           <small>
                             {severityLabel[finding.severity]} · {finding.rule}
+                            {activeException ? (
+                              <span className="finding-exception-badge">
+                                Exception active
+                              </span>
+                            ) : null}
                           </small>
                           <strong>{finding.title}</strong>
                         </span>
@@ -1406,6 +1673,147 @@ export default function Home() {
                               Copier
                             </button>
                           </div>
+                          {latestException ? (
+                            <section
+                              className={`finding-exception ${latestExceptionStatus}`}
+                              aria-label="Exception de risque"
+                            >
+                              <div className="finding-exception-head">
+                                <span>
+                                  {latestExceptionStatus === "active"
+                                    ? "RISQUE ACCEPTÉ TEMPORAIREMENT"
+                                    : latestExceptionStatus === "expired"
+                                      ? "EXCEPTION EXPIRÉE"
+                                      : "EXCEPTION RÉVOQUÉE"}
+                                </span>
+                                <strong>
+                                  {latestExceptionStatus === "active"
+                                    ? `jusqu’au ${formatExceptionDate(latestException.expiresAt)}`
+                                    : formatExceptionDate(
+                                        latestException.revokedAt ??
+                                          latestException.expiresAt,
+                                      )}
+                                </strong>
+                              </div>
+                              <p>{latestException.reason}</p>
+                              <small>
+                                Responsable : {latestException.owner} · créée le{" "}
+                                {formatExceptionDate(latestException.createdAt)}
+                              </small>
+                              {latestExceptionStatus === "active" ? (
+                                <button
+                                  className="exception-revoke"
+                                  onClick={() =>
+                                    revokeException(latestException.id)
+                                  }
+                                >
+                                  Révoquer l’exception
+                                </button>
+                              ) : null}
+                            </section>
+                          ) : null}
+                          {!activeException && !exceptionFormOpen ? (
+                            <button
+                              className="exception-trigger"
+                              onClick={() =>
+                                openExceptionForm(selectedServer, finding)
+                              }
+                            >
+                              Documenter une exception temporaire
+                            </button>
+                          ) : null}
+                          {exceptionFormOpen ? (
+                            <section
+                              className="exception-form"
+                              aria-label="Nouvelle exception de risque"
+                            >
+                              <div>
+                                <span className="section-kicker">
+                                  ACCEPTATION DU RISQUE
+                                </span>
+                                <strong>
+                                  Justifiez et limitez cette exception
+                                </strong>
+                              </div>
+                              <label>
+                                Motif et référence de suivi
+                                <textarea
+                                  rows={3}
+                                  maxLength={500}
+                                  value={exceptionDraft.reason}
+                                  onChange={(event) =>
+                                    setExceptionDraft({
+                                      ...exceptionDraft,
+                                      reason: event.target.value,
+                                    })
+                                  }
+                                  placeholder="Ex. Migration TLS suivie dans SEC-42, avec mesure compensatoire…"
+                                />
+                              </label>
+                              <div className="exception-form-grid">
+                                <label>
+                                  Responsable
+                                  <input
+                                    maxLength={80}
+                                    value={exceptionDraft.owner}
+                                    onChange={(event) =>
+                                      setExceptionDraft({
+                                        ...exceptionDraft,
+                                        owner: event.target.value,
+                                      })
+                                    }
+                                    placeholder="Équipe ou personne"
+                                  />
+                                </label>
+                                <label>
+                                  Expiration
+                                  <input
+                                    type="date"
+                                    min={exceptionDraft.minimumExpiresOn}
+                                    max={exceptionDraft.maximumExpiresOn}
+                                    value={exceptionDraft.expiresOn}
+                                    onChange={(event) =>
+                                      setExceptionDraft({
+                                        ...exceptionDraft,
+                                        expiresOn: event.target.value,
+                                      })
+                                    }
+                                  />
+                                </label>
+                              </div>
+                              {exceptionError ? (
+                                <p className="form-error" role="alert">
+                                  {exceptionError}
+                                </p>
+                              ) : null}
+                              <div className="exception-form-actions">
+                                <button
+                                  className="button secondary compact"
+                                  onClick={() => {
+                                    setExceptionDraft(null);
+                                    setExceptionError("");
+                                  }}
+                                >
+                                  Annuler
+                                </button>
+                                <button
+                                  className="button primary compact"
+                                  onClick={() =>
+                                    saveRiskException(
+                                      selectedServer,
+                                      finding,
+                                    )
+                                  }
+                                >
+                                  Enregistrer l’exception
+                                </button>
+                              </div>
+                              <small>
+                                Stockage local à cet appareil. L’export JSON et
+                                SARIF conserve la justification et l’échéance.
+                              </small>
+                            </section>
+                          ) : null}
                         </div>
                       )}
                     </article>

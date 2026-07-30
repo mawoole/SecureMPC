@@ -1369,6 +1369,7 @@ export function createSarifReport(
           properties: {
             severity: finding.severity,
             serverId: server.id,
+            findingId: finding.id,
             serverScore: server.score,
           },
         })),

@@ -45,6 +45,7 @@ directement applicables.
 - score de sécurité global et par serveur ;
 - priorisation par criticité ;
 - remédiations expliquées avec extraits de configuration copiables ;
+- exceptions de risque motivées, attribuées, datées et révocables ;
 - export de rapports JSON, SARIF et d’un SBOM CycloneDX 1.7 ;
 - vues dédiées aux serveurs, règles et audits ;
 - interface responsive et accessible au clavier.
@@ -57,6 +58,7 @@ par un collecteur local explicite :
 - aucune configuration importée n’est envoyée à un service distant ;
 - les valeurs sensibles détectées ne sont jamais affichées ;
 - aucun secret n’est enregistré dans le stockage du navigateur ;
+- le registre d’exceptions reste sur l’appareil dans le stockage du navigateur ;
 - les secrets concrets sont remplacés par `${REDACTED}` avant l’écriture de
   l’inventaire ;
 - le collecteur ne lance jamais les commandes des serveurs `stdio` ;
@@ -116,6 +118,24 @@ npm run build
 3. Cliquez sur **Analyser la configuration**.
 4. Consultez le score et les remédiations prioritaires.
 5. Ouvrez un serveur pour voir l’impact et copier le correctif recommandé.
+
+## Exceptions de risque
+
+Une correction qui ne peut pas être appliquée immédiatement peut être placée
+sous exception depuis le détail de l’écart. MCP Sentinel exige :
+
+- un motif explicite et, idéalement, une référence de suivi ;
+- un responsable identifié ;
+- une date d’expiration future, limitée à 366 jours.
+
+Une exception active retire temporairement l’écart des remédiations prioritaires
+mais ne réduit pas le score brut : le risque reste visible. À l’échéance ou après
+révocation, l’écart redevient automatiquement prioritaire.
+
+Le registre est conservé uniquement dans le navigateur courant. Le rapport JSON
+1.1 inclut les exceptions actives, expirées et révoquées. L’export SARIF conserve
+le résultat et ajoute une suppression `external/accepted` documentée pour les
+seules exceptions actives.
 
 Exemple minimal :
 
@@ -468,6 +488,7 @@ app/
   layout.tsx     Métadonnées et partage social
 lib/
   audit-engine.ts  Règles, scoring et exports JSON/SARIF
+  finding-exceptions.ts Registre local et exports des risques acceptés
   collector.ts     Découverte, redaction et probe MCP passif
   lockfiles.ts     Graphes package-lock, pnpm, Yarn, uv et Poetry
   kubernetes-admission.ts Génération sûre des politiques d’admission
@@ -483,6 +504,7 @@ tools/
   collector.ts     Interface en ligne de commande multiplateforme
 tests/
   audit-engine.test.ts     Tests de sécurité du moteur
+  finding-exceptions.test.ts Tests d’expiration, révocation et exports
   collector.test.ts        Tests du collecteur et du protocole passif
   kubernetes-admission.test.ts Tests YAML, identités et préfixes Kubernetes
   lockfiles.test.ts        Tests des graphes npm, pnpm, Yarn, uv et Poetry
@@ -552,11 +574,12 @@ l’application et vérifie le HTML produit.
 - elle ne confirme pas les permissions effectives côté GitHub, base de données,
   OAuth ou système de fichiers ;
 - l’historique affiché est illustratif et n’est pas encore persistant ;
+- le registre d’exceptions est local au navigateur et n’est pas synchronisé
+  entre les utilisateurs ou les appareils ;
 - le catalogue de règles devra évoluer avec les spécifications et pratiques MCP.
 
 ## Prochaines étapes possibles
 
-- gestion d’exceptions documentées et datées ;
 - validation CI des bundles Kubernetes générés ;
 - export d’un rapport PDF ;
 - historique persistant et suivi des écarts dans le temps ;
