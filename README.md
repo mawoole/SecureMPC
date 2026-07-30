@@ -584,6 +584,7 @@ lib/
   audit-engine.ts  Règles, scoring et exports JSON/SARIF
   audit-history.ts Agrégation confidentielle et comparaison des audits
   finding-exceptions.ts Registre local et exports des risques acceptés
+  trustmap-governance.ts Signature des politiques et bundles d’exceptions chiffrés
   collector.ts     Découverte, redaction et probe MCP passif
   lockfiles.ts     Graphes package-lock, pnpm, Yarn, uv et Poetry
   kubernetes-admission.ts Génération sûre des politiques d’admission
@@ -611,6 +612,7 @@ tests/
   pdf-report.test.ts       Tests du document PDF et de sa pagination
   provenance.test.ts       Tests ECDSA, digest SLSA et politique Sigstore
   supply-chain.test.ts     Tests npm, PyPI, OCI, PURL et CycloneDX
+  trustmap-governance.test.ts Tests des signatures et échanges chiffrés
   workspaces.test.ts       Tests de découverte et d’isolation des monorepos
   rendered-html.test.mjs   Tests du rendu de production
 public/
@@ -720,6 +722,38 @@ ordonnés chronologiquement et incluent les variations de score, les écarts
 introduits/résolus ainsi que les compteurs agrégés par règle. Aucun nom de
 serveur, chemin de configuration, extrait ou secret n’est exporté.
 
+### Signer les politiques CI
+
+Dans **TrustMap CI → Chaîne de confiance**, une équipe peut créer une identité
+ECDSA P-256, protégée par une phrase secrète et exportée dans un fichier JSON
+chiffré. La clé privée n’est jamais écrite en clair ni envoyée à un service.
+Cette identité signe ensuite l’ensemble des profils CI et produit un fichier
+`.signed.json`.
+
+Avant de charger les profils, le destinataire doit :
+
+1. obtenir l’empreinte `sha256:…` du signataire par un canal séparé ;
+2. charger le fichier de politique ;
+3. saisir cette empreinte comme identité approuvée ;
+4. laisser MCP TrustMap vérifier la clé, la signature ECDSA et le schéma.
+
+Une signature cryptographiquement valide sans empreinte approuvée reste
+explicitement **non fiable** et ne modifie pas les profils actifs. Une politique
+altérée, un profil mal formé ou une clé substituée est refusé.
+
+### Échanger les exceptions de manière chiffrée
+
+Dans **TrustMap Enterprise → Échange confidentiel**, le registre d’exceptions
+peut être exporté dans un bundle AES-256-GCM. La clé est dérivée localement
+d’une phrase secrète avec PBKDF2-HMAC-SHA-256 et un sel aléatoire. Le fichier
+chiffré peut être transmis par le canal documentaire habituel, tandis que la
+phrase secrète doit être communiquée séparément.
+
+À l’import, l’authenticité du bundle et son schéma sont vérifiés avant la
+fusion. Les décisions sont rapprochées par identifiant et une révocation gagne
+toujours sur une version active, ce qui évite de réactiver un risque déjà
+refusé. Aucune phrase secrète n’est persistée par l’application.
+
 ## Limites actuelles
 
 - la découverte doit être lancée explicitement sur chaque poste à inventorier ;
@@ -745,14 +779,19 @@ serveur, chemin de configuration, extrait ou secret n’est exporté.
   OAuth ou système de fichiers ;
 - l’historique est limité à 60 synthèses agrégées et ne permet pas de rouvrir
   l’inventaire complet d’un audit précédent ;
-- le registre d’exceptions est local au navigateur et n’est pas synchronisé
-  entre les utilisateurs ou les appareils ;
+- le registre d’exceptions reste local au navigateur ; sa synchronisation
+  s’effectue volontairement par échange de bundles chiffrés et n’est pas encore
+  automatique ;
+- l’empreinte d’une identité de signature doit être validée par un canal
+  distinct ; un fichier auto-signé ne constitue pas à lui seul une identité de
+  confiance ;
 - le catalogue de règles devra évoluer avec les spécifications et pratiques MCP.
 
 ## Prochaines étapes possibles
 
-- signature et vérification des fichiers de politique CI exportés ;
-- synchronisation chiffrée des exceptions entre membres d’un même espace.
+- synchronisation automatique des exceptions avec SSO, journal d’accès et
+  révocation centralisée ;
+- clés de signature matérielles ou gérées par un KMS d’entreprise.
 
 ## Contribution
 

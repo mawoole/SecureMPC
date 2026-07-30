@@ -115,6 +115,77 @@ export const DEFAULT_TRUSTMAP_CI_PROFILES: TrustMapCiPolicyProfile[] = [
   },
 ];
 
+export function normalizeTrustMapCiPolicyProfiles(
+  value: unknown,
+): TrustMapCiPolicyProfile[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 20) {
+    throw new Error("Le document doit contenir entre 1 et 20 politiques CI.");
+  }
+
+  const ids = new Set<string>();
+  const profiles = value.map((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new Error("Une politique CI est mal formée.");
+    }
+    const record = candidate as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id.trim() : "";
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    const configPath =
+      typeof record.configPath === "string" ? record.configPath.trim() : "";
+    const environment = record.environment;
+    const failOn = record.failOn;
+
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/.test(id) || ids.has(id)) {
+      throw new Error("Les identifiants de politique CI doivent être uniques et sûrs.");
+    }
+    if (!name || name.length > 60 || /[\u0000-\u001f\u007f]/.test(name)) {
+      throw new Error("Chaque politique CI doit avoir un nom valide.");
+    }
+    if (
+      environment !== "development" &&
+      environment !== "staging" &&
+      environment !== "production"
+    ) {
+      throw new Error("L’environnement de politique CI est invalide.");
+    }
+    if (failOn !== "critical" && failOn !== "high" && failOn !== "medium") {
+      throw new Error("Le seuil de politique CI est invalide.");
+    }
+
+    const booleanKeys = [
+      "enabled",
+      "sarif",
+      "sbom",
+      "osv",
+      "provenance",
+      "requireServers",
+    ] as const;
+    if (booleanKeys.some((key) => typeof record[key] !== "boolean")) {
+      throw new Error("Les options de politique CI doivent être booléennes.");
+    }
+
+    ids.add(id);
+    const profile: TrustMapCiPolicyProfile = {
+      id,
+      name,
+      environment,
+      enabled: record.enabled as boolean,
+      configPath,
+      failOn,
+      sarif: record.sarif as boolean,
+      sbom: record.sbom as boolean,
+      osv: record.osv as boolean,
+      provenance: record.provenance as boolean,
+      requireServers: record.requireServers as boolean,
+    };
+    createCiCommand(profile);
+    return profile;
+  });
+
+  createMultiEnvironmentWorkflow(profiles);
+  return profiles;
+}
+
 function distribution(values: string[]): DistributionItem[] {
   const counts = new Map<string, number>();
   for (const value of values) {

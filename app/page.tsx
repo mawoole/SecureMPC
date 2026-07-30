@@ -1335,6 +1335,7 @@ export default function Home() {
             servers={servers}
             exceptions={riskExceptions}
             onNotify={notify}
+            onExceptionsImported={setRiskExceptions}
           />
         )}
       </main>
