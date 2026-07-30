@@ -422,7 +422,7 @@ test("turns invalid SLSA or registry proofs into a critical finding", () => {
       generatedAt: "2026-07-30T12:00:00.000Z",
       collector: {
         name: "MCP Sentinel Collector",
-        version: "1.4.0",
+        version: "1.5.0",
         platform: "linux",
       },
       provenanceScan: {
@@ -515,6 +515,9 @@ test("imports a verified GitHub OCI attestation without inventing a supply-chain
         status: "complete",
         checkedAt: "2026-07-30T12:00:00.000Z",
         images: 1,
+        policies: 1,
+        matched: 1,
+        unmatched: 0,
         signaturesVerified: 0,
         slsaProvenanceVerified: 1,
         missing: 0,
@@ -551,6 +554,7 @@ test("imports a verified GitHub OCI attestation without inventing a supply-chain
                 slsaProvenance: "verified",
                 subjectDigest: "matched",
                 identityPolicy: "matched",
+                policyId: "github-acme",
                 sourceRepository: "https://github.com/acme/mcp",
                 message: "Attestation et digest vérifiés.",
               },
@@ -573,7 +577,92 @@ test("imports a verified GitHub OCI attestation without inventing a supply-chain
     "oci-github-attestation",
   );
   assert.equal(
+    servers[0].components?.[0].provenance?.policyId,
+    "github-acme",
+  );
+  assert.equal(
     servers[0].findings.some((finding) => finding.rule === "MCP-SUP-03"),
     false,
   );
+});
+
+test("turns an unmatched OCI policy into a critical actionable finding", () => {
+  const digest =
+    "sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+  const servers = auditConfiguration(
+    JSON.stringify({
+      schemaVersion: "1.0",
+      generatedAt: "2026-07-30T12:00:00.000Z",
+      collector: {
+        name: "MCP Sentinel Collector",
+        version: "1.5.0",
+        platform: "linux",
+      },
+      ociVerification: {
+        provider: "oci-provenance",
+        backend: "mixed",
+        status: "partial",
+        checkedAt: "2026-07-30T12:00:00.000Z",
+        images: 1,
+        policies: 2,
+        matched: 0,
+        unmatched: 1,
+        signaturesVerified: 0,
+        slsaProvenanceVerified: 0,
+        missing: 0,
+        failed: 1,
+        message: "Une image n’a aucune politique.",
+      },
+      sources: [],
+      servers: [
+        {
+          id: "oci-unmatched",
+          name: "oci-unmatched",
+          source: { client: "VS Code", path: ".vscode/mcp.json" },
+          configuration: {
+            command: "docker",
+            args: ["run", `quay.io/unknown/mcp@${digest}`],
+          },
+          redactions: [],
+          components: [
+            {
+              id: "oci-unmatched-component",
+              name: "quay.io/unknown/mcp",
+              ecosystem: "oci",
+              componentType: "container",
+              version: digest,
+              purl: `pkg:docker/quay.io/unknown/mcp@${encodeURIComponent(digest)}`,
+              pinStatus: "pinned",
+              reference: `quay.io/unknown/mcp@${digest}`,
+              evidence: "Image OCI verrouillée.",
+              scope: "direct",
+              provenance: {
+                provider: "oci-policy",
+                checkedAt: "2026-07-30T12:00:00.000Z",
+                registrySignature: "not-applicable",
+                slsaProvenance: "failed",
+                subjectDigest: "unavailable",
+                identityPolicy: "not-configured",
+                message: "Aucune politique OCI correspondante.",
+              },
+            },
+          ],
+          probe: {
+            status: "skipped-stdio",
+            checkedAt: "2026-07-30T12:00:00.000Z",
+            durationMs: 0,
+            message: "Serveur stdio non exécuté.",
+          },
+        },
+      ],
+    }),
+  );
+
+  const finding = servers[0].findings.find(
+    (entry) => entry.rule === "MCP-SUP-03",
+  );
+  assert.equal(finding?.severity, "critical");
+  assert.match(finding?.snippet ?? "", /--oci-policy-file/);
+  assert.equal(servers[0].ociVerification?.backend, "mixed");
+  assert.equal(servers[0].ociVerification?.unmatched, 1);
 });

@@ -30,7 +30,7 @@ directement applicables.
 - vérification cryptographique des signatures npm et des attestations SLSA
   avec Sigstore ;
 - vérification des signatures Cosign et des attestations SLSA d’images OCI
-  verrouillées par digest ;
+  verrouillées par digest, avec plusieurs politiques sélectionnées par préfixe ;
 - recherche optionnelle des vulnérabilités connues via OSV.dev ;
 - prise en charge des objets `mcpServers` utilisés par Claude Desktop, Cursor
   et VS Code ;
@@ -319,6 +319,34 @@ preuve signée, la racine de confiance, l’identité du dépôt et le digest. E
 prétend pas avoir vérifié une signature d’image Cosign distincte : l’interface
 affiche alors « GitHub SLSA » plutôt que « Cosign + SLSA ».
 
+#### Plusieurs politiques OCI
+
+Pour un inventaire qui utilise plusieurs registres ou organisations, partez du
+fichier [`examples/oci-policies.json`](examples/oci-policies.json), adaptez ses
+identités puis lancez :
+
+```bash
+npm run collect -- --oci-policy-file ./examples/oci-policies.json
+```
+
+Le document est versionné et chaque règle possède :
+
+- un `id` stable, restitué dans l’inventaire et le SBOM ;
+- un `imagePrefix` sans schéma, tag ni digest ;
+- une politique `github` liée à un dépôt `owner/repository`, ou une politique
+  `cosign` qui impose l’émetteur et l’identité du certificat.
+
+La règle au préfixe le plus long est toujours sélectionnée. Par exemple,
+`ghcr.io/acme/critical` prend le pas sur `ghcr.io/acme`. Les identifiants et
+préfixes dupliqués sont rejetés avant toute vérification. Il n’existe aucun
+fallback implicite : une image verrouillée qui ne correspond à aucune règle
+produit un constat critique « Politique absente » et doit être ajoutée
+explicitement au fichier avant sa mise en service.
+
+Le document est limité à 50 politiques et 256 Ko. `--cosign-path` reste
+utilisable avec un fichier mixte pour indiquer l’emplacement du binaire Cosign ;
+la voie GitHub continue d’utiliser `gh`.
+
 Les références d’images peuvent être transmises au registre et au service de
 confiance choisi. Pour un registre privé, `cosign` ou `gh` peut réutiliser ses
 propres identifiants déjà configurés ; MCP Sentinel ne lit ni ne conserve ces
@@ -405,6 +433,8 @@ lib/
   provenance.ts    Signatures npm et attestations SLSA/Sigstore
   supply-chain.ts  Détection des composants et export CycloneDX
   workspaces.ts    Découverte bornée et sélection des packages monorepo
+examples/
+  oci-policies.json Exemple de routage OCI GitHub/Cosign par préfixe
 tools/
   collector.ts     Interface en ligne de commande multiplateforme
 tests/
@@ -437,6 +467,7 @@ public/
 | `npm run collect -- --provenance-issuer <url> --provenance-identity <regexp>` | Contraint l’identité du workflow de publication |
 | `npm run collect -- --oci-cosign --oci-issuer <url> --oci-identity <regexp>` | Vérifie signature Cosign et provenance SLSA OCI |
 | `npm run collect -- --oci-github-repo <owner/repo>` | Vérifie une attestation OCI GitHub liée au dépôt attendu |
+| `npm run collect -- --oci-policy-file <fichier>` | Applique plusieurs politiques OCI par préfixe, sans fallback implicite |
 | `npm run collect -- --lockfile <fichier>` | Ajoute un lockfile explicite |
 | `npm run collect -- --no-lockfiles` | Désactive la découverte des lockfiles |
 | `npm run lint` | Vérifie les règles de qualité du code |
@@ -462,8 +493,8 @@ l’application et vérifie le HTML produit.
   ne sont pas devinées sans descripteur exact ;
 - les globs de workspace sont bornés à six niveaux et 250 manifests ;
 - les dépendances conditionnelles Python ne sont pas toutes résolues ;
-- une seule politique d’identité OCI s’applique par exécution ; les inventaires
-  provenant de plusieurs organisations doivent être vérifiés séparément ;
+- les fichiers OCI sont limités à 50 politiques et utilisent des préfixes
+  explicites plutôt que des motifs glob complexes ;
 - la voie Cosign requiert un binaire `cosign` installé localement et la voie
   GitHub requiert la CLI `gh` ;
 - OSV peut ne pas disposer d’un avis ou d’une sévérité normalisée pour tous les
@@ -475,7 +506,7 @@ l’application et vérifie le HTML produit.
 
 ## Prochaines étapes possibles
 
-- politiques d’identité OCI multiples sélectionnées par préfixe de registre ;
+- génération de politiques d’admission Kubernetes à partir des règles OCI ;
 - gestion d’exceptions documentées et datées ;
 - export d’un rapport PDF ;
 - historique persistant et suivi des écarts dans le temps ;

@@ -460,6 +460,7 @@ function sanitizeImportedComponent(
   const slsaProvenance = importedText(rawProvenance?.slsaProvenance, 30);
   const subjectDigest = importedText(rawProvenance?.subjectDigest, 30);
   const identityPolicy = importedText(rawProvenance?.identityPolicy, 30);
+  const policyId = importedText(rawProvenance?.policyId, 64);
   const provenanceMessage = importedText(rawProvenance?.message, 500);
   const sourceRepository = importedText(
     rawProvenance?.sourceRepository,
@@ -473,6 +474,7 @@ function sanitizeImportedComponent(
       "npm-registry-sigstore",
       "oci-cosign",
       "oci-github-attestation",
+      "oci-policy",
     ].includes(provenanceProvider ?? "") &&
     registrySignature &&
     slsaProvenance &&
@@ -501,6 +503,7 @@ function sanitizeImportedComponent(
           identityPolicy: identityPolicy as NonNullable<
             SupplyChainComponent["provenance"]
           >["identityPolicy"],
+          ...(policyId ? { policyId } : {}),
           ...(sourceRepository?.startsWith("https://")
             ? { sourceRepository }
             : {}),
@@ -546,7 +549,7 @@ function sanitizeOciVerification(
   const message = importedText(record.message, 500);
   if (
     record.provider !== "oci-provenance" ||
-    !["cosign", "github-attestations"].includes(backend ?? "") ||
+    !["cosign", "github-attestations", "mixed"].includes(backend ?? "") ||
     !["complete", "partial", "error"].includes(status ?? "") ||
     !checkedAt ||
     !message
@@ -565,6 +568,9 @@ function sanitizeOciVerification(
     status: status as OciVerificationSummary["status"],
     checkedAt,
     images: count(record.images),
+    policies: count(record.policies),
+    matched: count(record.matched),
+    unmatched: count(record.unmatched),
     signaturesVerified: count(record.signaturesVerified),
     slsaProvenanceVerified: count(record.slsaProvenanceVerified),
     missing: count(record.missing),
@@ -900,14 +906,28 @@ export function auditConfiguration(raw: string): McpServer[] {
           component.provenance.identityPolicy === "not-configured",
       );
       if (failedProvenance.length) {
+        const includesOci = failedProvenance.some(
+          (component) => component.ecosystem === "oci",
+        );
+        const includesUnmatchedPolicy = failedProvenance.some(
+          (component) => component.provenance?.provider === "oci-policy",
+        );
         findings.push(
           makeFinding(
             `collected-${index}-${slugify(name)}-provenance-failed`,
             "critical",
             "Preuve de provenance invalide",
             `${failedProvenance.length} composant${failedProvenance.length > 1 ? "s ont" : " a"} une signature invalide, un digest divergent ou une attestation Sigstore non vérifiable : ${failedProvenance.slice(0, 3).map((component) => component.name).join(", ")}.`,
-            "Bloquez la mise en service, régénérez le lockfile depuis une source de confiance et vérifiez le paquet, la version, le digest ainsi que l’identité du workflow de publication.",
-            "npm run collect -- --provenance --provenance-issuer https://token.actions.githubusercontent.com --provenance-identity '^https://github\\.com/ORG/REPO/.github/workflows/release\\.yml@refs/tags/.+$'",
+            includesUnmatchedPolicy
+              ? "Bloquez la mise en service et ajoutez une règle au fichier de politiques OCI pour chaque préfixe d’image attendu. Relancez ensuite la vérification sans modifier le digest."
+              : includesOci
+                ? "Bloquez la mise en service, vérifiez le digest, l’identité du workflow, la signature et l’attestation SLSA de l’image."
+                : "Bloquez la mise en service, régénérez le lockfile depuis une source de confiance et vérifiez le paquet, la version, le digest ainsi que l’identité du workflow de publication.",
+            includesUnmatchedPolicy
+              ? "npm run collect -- --oci-policy-file ./oci-policies.json"
+              : includesOci
+                ? "npm run collect -- --oci-cosign --oci-issuer https://token.actions.githubusercontent.com --oci-identity '^https://github\\.com/ORG/REPO/.github/workflows/release\\.yml@refs/tags/.+$'"
+                : "npm run collect -- --provenance --provenance-issuer https://token.actions.githubusercontent.com --provenance-identity '^https://github\\.com/ORG/REPO/.github/workflows/release\\.yml@refs/tags/.+$'",
             "MCP-SUP-03",
           ),
         );

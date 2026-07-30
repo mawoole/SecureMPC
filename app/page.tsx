@@ -1050,7 +1050,8 @@ export default function Home() {
               </li>
               <li>
                 Les images OCI verrouillées peuvent être vérifiées par Cosign
-                ou par les attestations GitHub, sans lancer le conteneur.
+                ou par les attestations GitHub, avec une politique par préfixe
+                et sans lancer le conteneur.
               </li>
             </ul>
 
@@ -1073,7 +1074,8 @@ export default function Home() {
             <p className="collector-help">
               Sans probe ni analyse OSV : <code>npm run collect</code>. Ajoutez{" "}
               <code>--path chemin/vers/mcp.json</code> pour un fichier
-              personnalisé.
+              personnalisé, ou <code>--oci-policy-file</code> pour plusieurs
+              identités OCI.
             </p>
           </section>
         </div>
@@ -1184,6 +1186,9 @@ export default function Home() {
                           : selectedServer.ociVerification.status === "partial"
                             ? "partiel"
                             : "indisponible"}
+                        {selectedServer.ociVerification.policies > 1
+                          ? ` · ${selectedServer.ociVerification.policies} règles`
+                          : ""}
                       </span>
                     ) : null}
                     {!selectedServer.vulnerabilityScan &&
@@ -1252,9 +1257,15 @@ export default function Home() {
                                     ? "error"
                                     : "partial"
                             }`}
-                            title={component.provenance.message}
+                            title={`${component.provenance.message}${
+                              component.provenance.policyId
+                                ? ` Politique : ${component.provenance.policyId}.`
+                                : ""
+                            }`}
                           >
-                            {component.provenance.registrySignature ===
+                            {component.provenance.provider === "oci-policy"
+                              ? "POLITIQUE ABSENTE"
+                              : component.provenance.registrySignature ===
                               "failed" ||
                             component.provenance.slsaProvenance === "failed"
                               ? "preuve invalide"

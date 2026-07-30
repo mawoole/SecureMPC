@@ -7,10 +7,12 @@ import type {
 } from "./supply-chain.ts";
 
 const MAX_OCI_IMAGES = 50;
+const MAX_OCI_POLICIES = 50;
 const MAX_COMMAND_OUTPUT_BYTES = 8_000_000;
 const DEFAULT_TIMEOUT_MS = 60_000;
 const SHA256_DIGEST = /^sha256:([a-f0-9]{64})$/i;
 const SLSA_PROVENANCE = /^https:\/\/slsa\.dev\/provenance\/v1$/;
+const POLICY_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$/;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -25,6 +27,19 @@ export type OciVerificationPolicy =
       kind: "github";
       repository: string;
     };
+
+export type OciVerificationRule = (
+  | Extract<OciVerificationPolicy, { kind: "cosign" }>
+  | Extract<OciVerificationPolicy, { kind: "github" }>
+) & {
+  id: string;
+  imagePrefix: string;
+};
+
+export type OciVerificationPolicyDocument = {
+  version: 1;
+  policies: OciVerificationRule[];
+};
 
 export type VerificationCommandResult = {
   code: number | null;
@@ -42,19 +57,27 @@ export type VerificationCommandRunner = (
 ) => Promise<VerificationCommandResult>;
 
 export type OciVerificationOptions = {
-  policy: OciVerificationPolicy;
+  policy?: OciVerificationPolicy;
+  policies?: OciVerificationRule[];
   commandRunner?: VerificationCommandRunner;
   executable?: string;
+  executables?: {
+    cosign?: string;
+    github?: string;
+  };
   now?: () => Date;
   timeoutMs?: number;
 };
 
 export type OciVerificationSummary = {
   provider: "oci-provenance";
-  backend: "cosign" | "github-attestations";
+  backend: "cosign" | "github-attestations" | "mixed";
   status: "complete" | "partial" | "error";
   checkedAt: string;
   images: number;
+  policies: number;
+  matched: number;
+  unmatched: number;
   signaturesVerified: number;
   slsaProvenanceVerified: number;
   missing: number;
@@ -115,6 +138,189 @@ export function validateOciVerificationPolicy(
   } catch {
     throw new Error("L’identité OCI doit être une expression régulière valide.");
   }
+}
+
+function normalizedImagePrefix(value: string): string {
+  const prefix = value
+    .trim()
+    .replace(/^docker:\/\//i, "")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+  if (
+    !prefix ||
+    prefix.length > 512 ||
+    prefix.includes("@") ||
+    prefix.includes("://") ||
+    /\s/.test(prefix)
+  ) {
+    throw new Error(
+      "Le préfixe OCI doit être un chemin de registre sans schéma, tag ni digest.",
+    );
+  }
+  const slash = prefix.indexOf("/");
+  const registry = prefix.slice(0, slash);
+  const repository = prefix.slice(slash + 1);
+  const registryPort = registry.match(/:(\d{1,5})$/)?.[1];
+  if (
+    slash < 1 ||
+    !repository ||
+    (registryPort !== undefined && Number(registryPort) > 65_535) ||
+    !/^(?:localhost|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::\d{1,5})?$/.test(
+      registry,
+    ) ||
+    repository.split("/").some(
+      (segment) =>
+        !segment ||
+        !/^[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*$/.test(segment),
+    )
+  ) {
+    throw new Error(
+      "Le préfixe OCI doit utiliser le format registre/organisation[/image].",
+    );
+  }
+  return prefix;
+}
+
+export function validateOciVerificationRules(
+  policies: OciVerificationRule[],
+): void {
+  if (!policies.length || policies.length > MAX_OCI_POLICIES) {
+    throw new Error(
+      `Le document OCI doit contenir entre 1 et ${MAX_OCI_POLICIES} politiques.`,
+    );
+  }
+  const identifiers = new Set<string>();
+  const prefixes = new Set<string>();
+  policies.forEach((policy) => {
+    if (!POLICY_ID.test(policy.id)) {
+      throw new Error(
+        "Chaque politique OCI doit avoir un identifiant sûr de 1 à 64 caractères.",
+      );
+    }
+    const identifier = policy.id.toLowerCase();
+    if (identifiers.has(identifier)) {
+      throw new Error(`Identifiant de politique OCI dupliqué : ${policy.id}.`);
+    }
+    identifiers.add(identifier);
+    const prefix = normalizedImagePrefix(policy.imagePrefix);
+    if (prefixes.has(prefix)) {
+      throw new Error(`Préfixe de politique OCI dupliqué : ${prefix}.`);
+    }
+    prefixes.add(prefix);
+    validateOciVerificationPolicy(policy);
+  });
+}
+
+function policyText(
+  value: unknown,
+  field: string,
+  index: number,
+  maxLength: number,
+): string {
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    value.length > maxLength
+  ) {
+    throw new Error(
+      `La politique OCI ${index + 1} doit définir ${field}.`,
+    );
+  }
+  return value.trim();
+}
+
+export function parseOciVerificationPolicyDocument(
+  value: unknown,
+): OciVerificationPolicyDocument {
+  const document = record(value);
+  if (
+    !document ||
+    document.version !== 1 ||
+    !Array.isArray(document.policies)
+  ) {
+    throw new Error(
+      "Le fichier de politiques OCI doit déclarer version: 1 et un tableau policies.",
+    );
+  }
+  if (
+    Object.keys(document).some(
+      (key) => !["version", "policies"].includes(key),
+    )
+  ) {
+    throw new Error(
+      "Le fichier de politiques OCI contient une propriété inconnue.",
+    );
+  }
+  const policies = document.policies.map((candidate, index) => {
+    const policy = record(candidate);
+    if (!policy || !["cosign", "github"].includes(String(policy.kind))) {
+      throw new Error(
+        `La politique OCI ${index + 1} doit utiliser kind: cosign ou github.`,
+      );
+    }
+    const id = policyText(policy.id, "id", index, 64);
+    const imagePrefix = policyText(
+      policy.imagePrefix,
+      "imagePrefix",
+      index,
+      512,
+    );
+    if (policy.kind === "github") {
+      const allowed = new Set(["id", "imagePrefix", "kind", "repository"]);
+      if (Object.keys(policy).some((key) => !allowed.has(key))) {
+        throw new Error(
+          `La politique OCI ${id} contient une propriété inconnue.`,
+        );
+      }
+      return {
+        id,
+        imagePrefix,
+        kind: "github" as const,
+        repository: policyText(policy.repository, "repository", index, 200),
+      };
+    }
+    const allowed = new Set([
+      "id",
+      "imagePrefix",
+      "kind",
+      "certificateIssuer",
+      "certificateIdentityURI",
+      "predicateType",
+    ]);
+    if (Object.keys(policy).some((key) => !allowed.has(key))) {
+      throw new Error(
+        `La politique OCI ${id} contient une propriété inconnue.`,
+      );
+    }
+    if (
+      policy.predicateType !== undefined &&
+      policy.predicateType !== "slsaprovenance1"
+    ) {
+      throw new Error(
+        `La politique OCI ${id} doit utiliser predicateType: slsaprovenance1.`,
+      );
+    }
+    return {
+      id,
+      imagePrefix,
+      kind: "cosign" as const,
+      certificateIssuer: policyText(
+        policy.certificateIssuer,
+        "certificateIssuer",
+        index,
+        2_048,
+      ),
+      certificateIdentityURI: policyText(
+        policy.certificateIdentityURI,
+        "certificateIdentityURI",
+        index,
+        1_000,
+      ),
+      predicateType: "slsaprovenance1" as const,
+    };
+  });
+  validateOciVerificationRules(policies);
+  return { version: 1, policies };
 }
 
 export const runVerificationCommand: VerificationCommandRunner = (
@@ -310,7 +516,7 @@ function commandFailureState(
     };
   }
   if (
-    /timeout|timed out|connection refused|tls handshake|network|dial tcp|unauthorized|denied/.test(
+    /timeout|timed out|connection refused|tls handshake|network|dial tcp|unauthorized|denied|no valid sigstore verifiers|trusted root|trust root/.test(
       output,
     )
   ) {
@@ -330,6 +536,7 @@ function initialProvenance(
   provider: ComponentProvenance["provider"],
   checkedAt: string,
   message: string,
+  policyId?: string,
 ): ComponentProvenance {
   return {
     provider,
@@ -338,6 +545,7 @@ function initialProvenance(
     slsaProvenance: "unverifiable",
     subjectDigest: "unavailable",
     identityPolicy: "not-configured",
+    ...(policyId ? { policyId } : {}),
     message,
   };
 }
@@ -349,6 +557,7 @@ async function verifyWithCosign(
   runner: VerificationCommandRunner,
   timeoutMs: number,
   checkedAt: string,
+  policyId?: string,
 ): Promise<ComponentProvenance> {
   const expectedDigest = component.version ?? "";
   const common = [
@@ -398,7 +607,12 @@ async function verifyWithCosign(
   if (attestationResult.code !== 0) {
     const failure = commandFailureState(attestationResult);
     return {
-      ...initialProvenance("oci-cosign", checkedAt, failure.message),
+      ...initialProvenance(
+        "oci-cosign",
+        checkedAt,
+        failure.message,
+        policyId,
+      ),
       registrySignature,
       slsaProvenance: failure.state,
       identityPolicy:
@@ -418,6 +632,7 @@ async function verifyWithCosign(
         "oci-cosign",
         checkedAt,
         "L’attestation vérifiée ne contient pas un sujet SLSA v1 correspondant au digest OCI.",
+        policyId,
       ),
       registrySignature,
       slsaProvenance: "failed",
@@ -433,6 +648,7 @@ async function verifyWithCosign(
     slsaProvenance: "verified",
     subjectDigest: "matched",
     identityPolicy: "matched",
+    ...(policyId ? { policyId } : {}),
     ...(details.repository ? { sourceRepository: details.repository } : {}),
     ...(details.builderId ? { builderId: details.builderId } : {}),
     message:
@@ -449,6 +665,7 @@ async function verifyWithGitHub(
   runner: VerificationCommandRunner,
   timeoutMs: number,
   checkedAt: string,
+  policyId?: string,
 ): Promise<ComponentProvenance> {
   const result = await runner(
     executable,
@@ -470,6 +687,7 @@ async function verifyWithGitHub(
         "oci-github-attestation",
         checkedAt,
         failure.message,
+        policyId,
       ),
       registrySignature: "not-applicable",
       slsaProvenance: failure.state,
@@ -489,6 +707,7 @@ async function verifyWithGitHub(
         "oci-github-attestation",
         checkedAt,
         "L’attestation GitHub vérifiée ne cible pas le digest OCI attendu avec un prédicat SLSA v1.",
+        policyId,
       ),
       registrySignature: "not-applicable",
       slsaProvenance: "failed",
@@ -504,6 +723,7 @@ async function verifyWithGitHub(
     slsaProvenance: "verified",
     subjectDigest: "matched",
     identityPolicy: "matched",
+    ...(policyId ? { policyId } : {}),
     sourceRepository:
       details.repository ?? `https://github.com/${policy.repository}`,
     ...(details.builderId ? { builderId: details.builderId } : {}),
@@ -519,17 +739,41 @@ export async function verifyOciProvenance(
   components: SupplyChainComponent[];
   summary: OciVerificationSummary;
 }> {
-  validateOciVerificationPolicy(options.policy);
+  if (Boolean(options.policy) === Boolean(options.policies)) {
+    throw new Error(
+      "Configurez soit une politique OCI globale, soit un ensemble de politiques par préfixe.",
+    );
+  }
+  if (options.policy) {
+    validateOciVerificationPolicy(options.policy);
+  }
+  if (options.policies) {
+    validateOciVerificationRules(options.policies);
+  }
+  const resolvedPolicies = (options.policies ?? [])
+    .map((policy) => ({
+      policy,
+      prefix: normalizedImagePrefix(policy.imagePrefix),
+    }))
+    .sort((left, right) => right.prefix.length - left.prefix.length);
+  const selectPolicy = (component: SupplyChainComponent) =>
+    resolvedPolicies.find(
+      ({ prefix }) =>
+        component.name.toLowerCase() === prefix ||
+        component.name.toLowerCase().startsWith(`${prefix}/`),
+    )?.policy;
   const checkedAt = (options.now ?? (() => new Date()))().toISOString();
   const timeoutMs = Math.min(
     180_000,
     Math.max(5_000, options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
   );
-  const executable = safeExecutable(
-    options.executable ??
-      (options.policy.kind === "cosign" ? "cosign" : "gh"),
-    options.policy.kind === "cosign" ? "cosign" : "gh",
-  );
+  const executableFor = (kind: OciVerificationPolicy["kind"]) =>
+    safeExecutable(
+      options.executables?.[kind] ??
+        options.executable ??
+        (kind === "cosign" ? "cosign" : "gh"),
+      kind === "cosign" ? "cosign" : "gh",
+    );
   const runner = options.commandRunner ?? runVerificationCommand;
   const allEligible = [
     ...new Map(
@@ -544,28 +788,49 @@ export async function verifyOciProvenance(
   ];
   const eligible = allEligible.slice(0, MAX_OCI_IMAGES);
   const results = new Map<string, ComponentProvenance>();
+  let unmatched = 0;
   let cursor = 0;
   const worker = async () => {
     while (cursor < eligible.length) {
       const component = eligible[cursor];
       cursor += 1;
+      const selectedPolicy = options.policy ?? selectPolicy(component);
+      if (!selectedPolicy) {
+        unmatched += 1;
+        results.set(component.purl ?? component.id, {
+          ...initialProvenance(
+            "oci-policy",
+            checkedAt,
+            `Aucune politique d’identité OCI ne correspond à ${component.name}.`,
+          ),
+          registrySignature: "not-applicable",
+          slsaProvenance: "failed",
+        });
+        continue;
+      }
+      const policyId =
+        "id" in selectedPolicy && typeof selectedPolicy.id === "string"
+          ? selectedPolicy.id
+          : "default";
       const provenance =
-        options.policy.kind === "cosign"
+        selectedPolicy.kind === "cosign"
           ? await verifyWithCosign(
               component,
-              options.policy,
-              executable,
+              selectedPolicy,
+              executableFor("cosign"),
               runner,
               timeoutMs,
               checkedAt,
+              policyId,
             )
           : await verifyWithGitHub(
               component,
-              options.policy,
-              executable,
+              selectedPolicy,
+              executableFor("github"),
               runner,
               timeoutMs,
               checkedAt,
+              policyId,
             );
       results.set(component.purl ?? component.id, provenance);
     }
@@ -605,8 +870,19 @@ export async function verifyOciProvenance(
           allEligible.length > MAX_OCI_IMAGES
         ? "partial"
         : "complete";
-  const backend =
-    options.policy.kind === "cosign" ? "cosign" : "github-attestations";
+  const policyKinds = new Set(
+    options.policy
+      ? [options.policy.kind]
+      : options.policies?.map((policy) => policy.kind),
+  );
+  const backend: OciVerificationSummary["backend"] =
+    policyKinds.size > 1
+      ? "mixed"
+      : policyKinds.has("cosign")
+        ? "cosign"
+        : "github-attestations";
+  const policyCount = options.policy ? 1 : (options.policies?.length ?? 0);
+  const matched = eligible.length - unmatched;
   return {
     components: components.map((component) => {
       const provenance = results.get(component.purl ?? component.id);
@@ -618,17 +894,22 @@ export async function verifyOciProvenance(
       status,
       checkedAt,
       images: eligible.length,
+      policies: policyCount,
+      matched,
+      unmatched,
       signaturesVerified,
       slsaProvenanceVerified,
       missing,
       failed,
       message:
         status === "complete"
-          ? backend === "cosign"
-            ? "Toutes les signatures Cosign et provenances SLSA OCI ont été vérifiées."
-            : "Toutes les attestations GitHub et leurs digests OCI ont été vérifiés."
+          ? eligible.length
+            ? `${matched} image${matched > 1 ? "s" : ""} OCI conforme${matched > 1 ? "s" : ""} à ${policyCount} politique${policyCount > 1 ? "s" : ""} d’identité.`
+            : `${policyCount} politique${policyCount > 1 ? "s" : ""} OCI chargée${policyCount > 1 ? "s" : ""} ; aucune image verrouillée n’était éligible.`
           : status === "error"
             ? "L’outil OCI, le registre ou le service de confiance est indisponible."
+            : unmatched
+              ? `${unmatched} image${unmatched > 1 ? "s n’ont" : " n’a"} aucune politique OCI correspondante.`
             : "Vérification OCI terminée avec des preuves absentes, incomplètes ou invalides.",
     },
   };

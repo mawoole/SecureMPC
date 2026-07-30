@@ -18,6 +18,7 @@ import type { VulnerabilityScanSummary } from "./osv.ts";
 import {
   verifyOciProvenance,
   type OciVerificationPolicy,
+  type OciVerificationRule,
   type OciVerificationSummary,
   type VerificationCommandRunner,
 } from "./oci-provenance.ts";
@@ -143,6 +144,7 @@ export type CollectOptions = DiscoveryContext & {
   provenancePolicy?: ProvenancePolicy;
   verifyOciProvenance?: boolean;
   ociVerificationPolicy?: OciVerificationPolicy;
+  ociVerificationPolicies?: OciVerificationRule[];
   ociVerifierExecutable?: string;
   verificationCommandRunner?: VerificationCommandRunner;
 };
@@ -618,7 +620,7 @@ export async function probeConfiguration(
           capabilities: {},
           clientInfo: {
             name: "mcp-sentinel-collector",
-            version: "1.4.0",
+            version: "1.5.0",
           },
         },
       }),
@@ -955,7 +957,10 @@ export async function collectInventory(
 
   let ociVerification: OciVerificationSummary | undefined;
   if (options.verifyOciProvenance) {
-    if (!options.ociVerificationPolicy) {
+    if (
+      !options.ociVerificationPolicy &&
+      !options.ociVerificationPolicies?.length
+    ) {
       throw new Error(
         "Une politique d’identité OCI est requise pour vérifier les preuves.",
       );
@@ -964,9 +969,17 @@ export async function collectInventory(
     const verification = await verifyOciProvenance(
       servers.flatMap((server) => server.components),
       {
-        policy: options.ociVerificationPolicy,
+        ...(options.ociVerificationPolicy
+          ? { policy: options.ociVerificationPolicy }
+          : { policies: options.ociVerificationPolicies }),
         now,
-        executable: options.ociVerifierExecutable,
+        ...(options.ociVerifierExecutable
+          ? {
+              executables: {
+                cosign: options.ociVerifierExecutable,
+              },
+            }
+          : {}),
         commandRunner: options.verificationCommandRunner,
       },
     );
@@ -984,7 +997,7 @@ export async function collectInventory(
     generatedAt: now().toISOString(),
     collector: {
       name: "MCP Sentinel Collector",
-      version: "1.4.0",
+      version: "1.5.0",
       platform: options.platform ?? process.platform,
       security: {
         secretsRedacted: true,
