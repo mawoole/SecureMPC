@@ -53,11 +53,13 @@ test("keeps the audit engine separate from the interface", async () => {
     supplyChain,
     lockfiles,
     kubernetesAdmission,
+    kubernetesAdmissionValidation,
     ociProvenance,
     osv,
     provenance,
     workspaces,
     packageJson,
+    ciWorkflow,
   ] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
@@ -69,11 +71,16 @@ test("keeps the audit engine separate from the interface", async () => {
       new URL("../lib/kubernetes-admission.ts", import.meta.url),
       "utf8",
     ),
+    readFile(
+      new URL("../lib/kubernetes-admission-validation.ts", import.meta.url),
+      "utf8",
+    ),
     readFile(new URL("../lib/oci-provenance.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/osv.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/provenance.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/workspaces.ts", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /from "\.\.\/lib\/audit-engine"/);
@@ -90,6 +97,10 @@ test("keeps the audit engine separate from the interface", async () => {
     kubernetesAdmission,
     /export function generateKubernetesAdmissionBundle/,
   );
+  assert.match(
+    kubernetesAdmissionValidation,
+    /export function validateKubernetesAdmissionBundle/,
+  );
   assert.match(ociProvenance, /export async function verifyOciProvenance/);
   assert.match(
     ociProvenance,
@@ -101,6 +112,9 @@ test("keeps the audit engine separate from the interface", async () => {
   assert.match(workspaces, /export async function discoverWorkspacePackages/);
   assert.match(page, /npm run collect:security/);
   assert.match(packageJson, /generate:admission/);
+  assert.match(packageJson, /validate:admission/);
+  assert.match(ciWorkflow, /Generate Kubernetes admission bundle/);
+  assert.match(ciWorkflow, /npm run validate:admission/);
   assert.match(layout, /MCP Sentinel — Audit de sécurité MCP/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   let previewFiles = [];
