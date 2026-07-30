@@ -34,6 +34,7 @@ directement applicables.
 - génération hors ligne de politiques d’admission Kubernetes Sigstore à partir
   des mêmes identités OCI ;
 - validation CI déterministe des bundles Kubernetes générés ;
+- contrôle CI des configurations avec seuil de sévérité et export SARIF ;
 - recherche optionnelle des vulnérabilités connues via OSV.dev ;
 - prise en charge des objets JSON `mcpServers` utilisés par Claude Desktop,
   Claude Code, Cursor et VS Code, ainsi que des tables TOML `mcp_servers` de
@@ -588,6 +589,7 @@ public/
 | `npm run build` | Produit et valide la version de production |
 | `npm run start` | Lance la version construite |
 | `npm run collect` | Produit un inventaire local assaini |
+| `npm run audit:ci -- --path <fichier>` | Bloque la CI sur les constats critiques ou élevés |
 | `npm run collect:sbom` | Produit l’inventaire et le SBOM CycloneDX |
 | `npm run collect:security` | Ajoute le probe, OSV, la provenance npm et le SBOM |
 | `npm run collect -- --probe` | Ajoute une négociation passive des endpoints HTTPS |
@@ -612,6 +614,52 @@ Le workflow GitHub Actions `.github/workflows/ci.yml` s’exécute sur chaque pu
 request et chaque mise à jour de `main`. Le collecteur et le moteur sont testés
 sur Linux, Windows et macOS. Un second job lance le lint, construit
 l’application et vérifie le HTML produit.
+
+### Bloquer une configuration MCP à haut risque
+
+Le mode CI audite uniquement les fichiers passés avec `--path`, exige qu’au
+moins un serveur soit trouvé et termine avec le code `3` si un constat critique
+ou élevé est détecté :
+
+```bash
+npm run audit:ci -- \
+  --path ./.mcp.json \
+  --sarif ./mcp-sentinel.sarif
+```
+
+Le seuil peut être adapté avec `--fail-on critical|high|medium`. Utilisez
+`--no-default-paths` dans une CI pour ne jamais auditer les fichiers utilisateur
+du runner ; le script `audit:ci` l’active déjà. `--require-servers` empêche un
+fichier absent ou mal ciblé de produire un faux succès. Le résumé console
+n’affiche ni extraits de configuration ni secrets.
+
+Exemple GitHub Actions avec publication des constats dans Code Scanning :
+
+```yaml
+permissions:
+  contents: read
+  security-events: write
+
+steps:
+  - uses: actions/checkout@v6
+  - uses: actions/setup-node@v6
+    with:
+      node-version: 22.13
+      cache: npm
+  - run: npm ci
+  - name: Audit MCP
+    run: npm run audit:ci -- --path ./.mcp.json --sarif
+  - name: Publier le rapport SARIF
+    if: always() && hashFiles('mcp-sentinel.sarif') != ''
+    uses: github/codeql-action/upload-sarif@v4
+    with:
+      sarif_file: mcp-sentinel.sarif
+```
+
+Les codes de sortie sont stables : `0` pour un contrôle réussi, `1` pour une
+erreur d’entrée ou d’exécution, `2` pour une analyse réseau/provenance
+incomplète et `3` pour une politique CI refusée. Si une analyse distante est
+incomplète et que le seuil est aussi dépassé, le refus de politique (`3`) prime.
 
 ## Limites actuelles
 
@@ -644,7 +692,7 @@ l’application et vérifie le HTML produit.
 ## Prochaines étapes possibles
 
 - historique persistant et suivi des écarts dans le temps ;
-- intégration CI pour bloquer les configurations à haut risque.
+- politiques CI différenciées par environnement ou répertoire.
 
 ## Contribution
 

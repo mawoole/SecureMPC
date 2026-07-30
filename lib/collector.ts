@@ -1159,7 +1159,7 @@ export async function collectInventory(
     generatedAt: now().toISOString(),
     collector: {
       name: "MCP Sentinel Collector",
-      version: "1.7.0",
+      version: "1.8.0",
       platform: options.platform ?? process.platform,
       security: {
         secretsRedacted: true,
