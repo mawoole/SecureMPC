@@ -3,6 +3,7 @@ import {
   type SupplyChainComponent,
 } from "./supply-chain.ts";
 import type { VulnerabilityScanSummary } from "./osv.ts";
+import type { OciVerificationSummary } from "./oci-provenance.ts";
 import type { ProvenanceScanSummary } from "./provenance.ts";
 
 export type Severity = "critical" | "high" | "medium";
@@ -61,6 +62,7 @@ export type McpServer = {
   };
   vulnerabilityScan?: VulnerabilityScanSummary;
   provenanceScan?: ProvenanceScanSummary;
+  ociVerification?: OciVerificationSummary;
 };
 
 export type SecurityRule = {
@@ -465,8 +467,13 @@ function sanitizeImportedComponent(
   );
   const builderId = importedText(rawProvenance?.builderId, 2_048);
   const checkedAt = importedText(rawProvenance?.checkedAt, 100);
+  const provenanceProvider = importedText(rawProvenance?.provider, 50);
   const provenance =
-    rawProvenance?.provider === "npm-registry-sigstore" &&
+    [
+      "npm-registry-sigstore",
+      "oci-cosign",
+      "oci-github-attestation",
+    ].includes(provenanceProvider ?? "") &&
     registrySignature &&
     slsaProvenance &&
     verificationStates.includes(registrySignature) &&
@@ -478,7 +485,9 @@ function sanitizeImportedComponent(
     provenanceMessage &&
     checkedAt
       ? {
-          provider: "npm-registry-sigstore" as const,
+          provider: provenanceProvider as NonNullable<
+            SupplyChainComponent["provenance"]
+          >["provider"],
           checkedAt,
           registrySignature: registrySignature as NonNullable<
             SupplyChainComponent["provenance"]
@@ -521,6 +530,46 @@ function sanitizeImportedComponent(
     ...(workspace ? { workspace } : {}),
     ...(provenance ? { provenance } : {}),
     vulnerabilities,
+  };
+}
+
+function sanitizeOciVerification(
+  value: unknown,
+): OciVerificationSummary | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const status = importedText(record.status, 20);
+  const backend = importedText(record.backend, 30);
+  const checkedAt = importedText(record.checkedAt, 100);
+  const message = importedText(record.message, 500);
+  if (
+    record.provider !== "oci-provenance" ||
+    !["cosign", "github-attestations"].includes(backend ?? "") ||
+    !["complete", "partial", "error"].includes(status ?? "") ||
+    !checkedAt ||
+    !message
+  ) {
+    return undefined;
+  }
+  const count = (candidate: unknown) =>
+    typeof candidate === "number" &&
+    Number.isSafeInteger(candidate) &&
+    candidate >= 0
+      ? candidate
+      : 0;
+  return {
+    provider: "oci-provenance",
+    backend: backend as OciVerificationSummary["backend"],
+    status: status as OciVerificationSummary["status"],
+    checkedAt,
+    images: count(record.images),
+    signaturesVerified: count(record.signaturesVerified),
+    slsaProvenanceVerified: count(record.slsaProvenanceVerified),
+    missing: count(record.missing),
+    failed: count(record.failed),
+    message,
   };
 }
 
@@ -664,6 +713,9 @@ export function auditConfiguration(raw: string): McpServer[] {
     );
     const provenanceScan = sanitizeProvenanceScan(
       parsedRecord.provenanceScan,
+    );
+    const ociVerification = sanitizeOciVerification(
+      parsedRecord.ociVerification,
     );
 
     return (parsedRecord.servers as unknown[]).map((entry, index) => {
@@ -861,14 +913,21 @@ export function auditConfiguration(raw: string): McpServer[] {
         );
       }
       if (missingProvenance.length) {
+        const includesOci = missingProvenance.some(
+          (component) => component.ecosystem === "oci",
+        );
         findings.push(
           makeFinding(
             `collected-${index}-${slugify(name)}-provenance-missing`,
             "medium",
             "Provenance incomplète",
             `${missingProvenance.length} composant direct n’a pas de signature ou de provenance SLSA vérifiable : ${missingProvenance.slice(0, 3).map((component) => component.name).join(", ")}.`,
-            "Préférez une version publiée avec provenance npm, conservez son intégrité SRI dans le lockfile et relancez le collecteur avec --provenance.",
-            "npm run collect -- --provenance",
+            includesOci
+              ? "Publiez l’image avec une signature et une attestation SLSA liées au digest, puis relancez avec une politique Cosign ou un dépôt GitHub attendu."
+              : "Préférez une version publiée avec provenance npm, conservez son intégrité SRI dans le lockfile et relancez le collecteur avec --provenance.",
+            includesOci
+              ? "npm run collect -- --oci-cosign --oci-issuer https://token.actions.githubusercontent.com --oci-identity '^https://github\\.com/ORG/REPO/.github/workflows/release\\.yml@refs/tags/.+$'"
+              : "npm run collect -- --provenance",
             "MCP-SUP-03",
           ),
         );
@@ -880,8 +939,12 @@ export function auditConfiguration(raw: string): McpServer[] {
             "medium",
             "Vérification de provenance indisponible",
             `La vérification réseau ou le matériel de confiance Sigstore a échoué pour ${provenanceErrors.length} composant${provenanceErrors.length > 1 ? "s" : ""}.`,
-            "Vérifiez l’accès HTTPS au registre npm et aux services de confiance Sigstore, puis relancez exactement le même inventaire.",
-            "npm run collect -- --provenance",
+            "Vérifiez l’accès HTTPS au registre concerné, à Sigstore et au vérificateur sélectionné, puis relancez exactement le même inventaire.",
+            provenanceErrors.some(
+              (component) => component.ecosystem === "oci",
+            )
+              ? "cosign version"
+              : "npm run collect -- --provenance",
             "MCP-SUP-03",
           ),
         );
@@ -965,6 +1028,7 @@ export function auditConfiguration(raw: string): McpServer[] {
         componentGraph,
         vulnerabilityScan,
         provenanceScan,
+        ociVerification,
       };
     });
   }
@@ -1181,6 +1245,9 @@ function cloneForReport(server: McpServer): McpServer {
       : undefined,
     provenanceScan: server.provenanceScan
       ? { ...server.provenanceScan }
+      : undefined,
+    ociVerification: server.ociVerification
+      ? { ...server.ociVerification }
       : undefined,
     componentGraph: server.componentGraph
       ? {

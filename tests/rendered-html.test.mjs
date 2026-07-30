@@ -51,6 +51,7 @@ test("keeps the audit engine separate from the interface", async () => {
     auditEngine,
     supplyChain,
     lockfiles,
+    ociProvenance,
     osv,
     provenance,
     workspaces,
@@ -61,6 +62,7 @@ test("keeps the audit engine separate from the interface", async () => {
     readFile(new URL("../lib/audit-engine.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/supply-chain.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/lockfiles.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/oci-provenance.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/osv.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/provenance.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/workspaces.ts", import.meta.url), "utf8"),
@@ -75,6 +77,7 @@ test("keeps the audit engine separate from the interface", async () => {
   assert.match(supplyChain, /export function createCycloneDxReport/);
   assert.match(lockfiles, /export async function analyzeLockfile/);
   assert.match(lockfiles, /export function enrichComponentsFromLockfiles/);
+  assert.match(ociProvenance, /export async function verifyOciProvenance/);
   assert.match(osv, /export async function scanComponentsWithOsv/);
   assert.match(provenance, /export async function verifyComponentProvenance/);
   assert.match(workspaces, /export async function discoverWorkspacePackages/);

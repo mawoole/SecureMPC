@@ -1048,6 +1048,10 @@ export default function Home() {
                 Les preuves npm rapprochent signature, intégrité du lockfile et
                 attestation SLSA vérifiée par Sigstore.
               </li>
+              <li>
+                Les images OCI verrouillées peuvent être vérifiées par Cosign
+                ou par les attestations GitHub, sans lancer le conteneur.
+              </li>
             </ul>
 
             <label className="file-drop">
@@ -1169,8 +1173,22 @@ export default function Home() {
                             : "indisponible"}
                       </span>
                     ) : null}
+                    {selectedServer.ociVerification ? (
+                      <span
+                        className={`provenance-status ${selectedServer.ociVerification.status}`}
+                        title={selectedServer.ociVerification.message}
+                      >
+                        OCI{" "}
+                        {selectedServer.ociVerification.status === "complete"
+                          ? "vérifié"
+                          : selectedServer.ociVerification.status === "partial"
+                            ? "partiel"
+                            : "indisponible"}
+                      </span>
+                    ) : null}
                     {!selectedServer.vulnerabilityScan &&
-                    !selectedServer.provenanceScan ? (
+                    !selectedServer.provenanceScan &&
+                    !selectedServer.ociVerification ? (
                       <span className="supply-chain-placeholder" aria-hidden="true">
                         ⬡
                       </span>
@@ -1222,6 +1240,11 @@ export default function Home() {
                                     component.provenance.slsaProvenance ===
                                       "verified"
                                   ? "verified"
+                                  : component.provenance.provider ===
+                                        "oci-github-attestation" &&
+                                      component.provenance.slsaProvenance ===
+                                        "verified"
+                                    ? "verified"
                                   : component.provenance.registrySignature ===
                                         "error" ||
                                       component.provenance.slsaProvenance ===
@@ -1239,7 +1262,15 @@ export default function Home() {
                                     "verified" &&
                                   component.provenance.slsaProvenance ===
                                     "verified"
-                                ? "SIG + SLSA"
+                                ? component.provenance.provider ===
+                                  "oci-cosign"
+                                  ? "COSIGN + SLSA"
+                                  : "SIG + SLSA"
+                                : component.provenance.provider ===
+                                      "oci-github-attestation" &&
+                                    component.provenance.slsaProvenance ===
+                                      "verified"
+                                  ? "GITHUB SLSA"
                                 : component.provenance.registrySignature ===
                                     "verified"
                                   ? "SIG OK"

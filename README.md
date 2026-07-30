@@ -29,6 +29,8 @@ directement applicables.
 - découverte bornée des packages npm/pnpm/Yarn d’un monorepo ;
 - vérification cryptographique des signatures npm et des attestations SLSA
   avec Sigstore ;
+- vérification des signatures Cosign et des attestations SLSA d’images OCI
+  verrouillées par digest ;
 - recherche optionnelle des vulnérabilités connues via OSV.dev ;
 - prise en charge des objets `mcpServers` utilisés par Claude Desktop, Cursor
   et VS Code ;
@@ -69,6 +71,9 @@ par un collecteur local explicite :
   digest public de celui du lockfile ;
 - les attestations SLSA sont validées localement avec les racines de confiance
   et journaux de transparence Sigstore ;
+- la vérification OCI lance uniquement `cosign verify`,
+  `cosign verify-attestation` ou `gh attestation verify` avec une liste
+  d’arguments fixe ; aucun shell, conteneur ou serveur MCP n’est exécuté ;
 - les données de démonstration peuvent être restaurées à tout moment.
 
 Même avec ces protections, évitez de partager ou de committer une configuration
@@ -278,6 +283,47 @@ cryptographiquement vérifiée mais l’audit signale concrètement que l’iden
 source n’est pas contrainte. Une signature invalide, un digest divergent ou une
 attestation Sigstore invalide produit un constat critique.
 
+### Signatures et provenance des images OCI
+
+Seules les images verrouillées sous la forme
+`registre/organisation/image@sha256:...` sont éligibles. Un tag, même
+versionné, reste mutable et n’est jamais présenté comme vérifié.
+
+Pour tous les registres compatibles Cosign, installez
+[Cosign](https://docs.sigstore.dev/cosign/system_config/installation/), puis
+imposez l’émetteur et l’identité attendus :
+
+```bash
+npm run collect -- \
+  --oci-cosign \
+  --oci-issuer https://token.actions.githubusercontent.com \
+  --oci-identity '^https://github\.com/ORG/REPO/.github/workflows/release\.yml@refs/tags/.+$'
+```
+
+Le collecteur exécute sans shell `cosign verify` puis
+`cosign verify-attestation --type slsaprovenance1`. Il conserve les contrôles
+de claims et de journal de transparence actifs, puis vérifie à nouveau que le
+digest de la signature et le sujet de l’attestation correspondent exactement à
+l’image configurée. `--cosign-path chemin/vers/cosign` permet d’utiliser un
+binaire installé hors du `PATH`.
+
+Pour une image attestée par GitHub, la voie suivante utilise la CLI GitHub et
+contraint directement le dépôt producteur :
+
+```bash
+npm run collect -- --oci-github-repo ORG/REPO
+```
+
+Cette commande appelle `gh attestation verify oci://IMAGE@sha256:...`, valide la
+preuve signée, la racine de confiance, l’identité du dépôt et le digest. Elle ne
+prétend pas avoir vérifié une signature d’image Cosign distincte : l’interface
+affiche alors « GitHub SLSA » plutôt que « Cosign + SLSA ».
+
+Les références d’images peuvent être transmises au registre et au service de
+confiance choisi. Pour un registre privé, `cosign` ou `gh` peut réutiliser ses
+propres identifiants déjà configurés ; MCP Sentinel ne lit ni ne conserve ces
+identifiants.
+
 ### Vulnérabilités connues avec OSV
 
 L’analyse OSV est explicite et ne concerne que les composants dont la version
@@ -354,6 +400,7 @@ lib/
   audit-engine.ts  Règles, scoring et exports JSON/SARIF
   collector.ts     Découverte, redaction et probe MCP passif
   lockfiles.ts     Graphes package-lock, pnpm, Yarn, uv et Poetry
+  oci-provenance.ts Vérification OCI bornée via Cosign ou GitHub
   osv.ts           Client OSV limité aux PURL versionnés
   provenance.ts    Signatures npm et attestations SLSA/Sigstore
   supply-chain.ts  Détection des composants et export CycloneDX
@@ -364,6 +411,7 @@ tests/
   audit-engine.test.ts     Tests de sécurité du moteur
   collector.test.ts        Tests du collecteur et du protocole passif
   lockfiles.test.ts        Tests des graphes npm, pnpm, Yarn, uv et Poetry
+  oci-provenance.test.ts    Tests Cosign/GitHub, identité et digests OCI
   osv.test.ts              Tests du client OSV et de ses limites réseau
   provenance.test.ts       Tests ECDSA, digest SLSA et politique Sigstore
   supply-chain.test.ts     Tests npm, PyPI, OCI, PURL et CycloneDX
@@ -387,6 +435,8 @@ public/
 | `npm run collect -- --osv` | Interroge OSV avec les seuls PURL versionnés |
 | `npm run collect -- --provenance` | Vérifie signatures npm et attestations SLSA/Sigstore |
 | `npm run collect -- --provenance-issuer <url> --provenance-identity <regexp>` | Contraint l’identité du workflow de publication |
+| `npm run collect -- --oci-cosign --oci-issuer <url> --oci-identity <regexp>` | Vérifie signature Cosign et provenance SLSA OCI |
+| `npm run collect -- --oci-github-repo <owner/repo>` | Vérifie une attestation OCI GitHub liée au dépôt attendu |
 | `npm run collect -- --lockfile <fichier>` | Ajoute un lockfile explicite |
 | `npm run collect -- --no-lockfiles` | Désactive la découverte des lockfiles |
 | `npm run lint` | Vérifie les règles de qualité du code |
@@ -412,9 +462,10 @@ l’application et vérifie le HTML produit.
   ne sont pas devinées sans descripteur exact ;
 - les globs de workspace sont bornés à six niveaux et 250 manifests ;
 - les dépendances conditionnelles Python ne sont pas toutes résolues ;
-- la provenance en ligne couvre actuellement les paquets npm ; les images OCI
-  sont contrôlées par digest mais leurs signatures Cosign ne sont pas encore
-  interrogées ;
+- une seule politique d’identité OCI s’applique par exécution ; les inventaires
+  provenant de plusieurs organisations doivent être vérifiés séparément ;
+- la voie Cosign requiert un binaire `cosign` installé localement et la voie
+  GitHub requiert la CLI `gh` ;
 - OSV peut ne pas disposer d’un avis ou d’une sévérité normalisée pour tous les
   écosystèmes ; le statut de l’analyse doit donc être vérifié dans l’inventaire ;
 - elle ne confirme pas les permissions effectives côté GitHub, base de données,
@@ -424,7 +475,7 @@ l’application et vérifie le HTML produit.
 
 ## Prochaines étapes possibles
 
-- vérification Cosign/SLSA des images OCI et politiques d’identité par registre ;
+- politiques d’identité OCI multiples sélectionnées par préfixe de registre ;
 - gestion d’exceptions documentées et datées ;
 - export d’un rapport PDF ;
 - historique persistant et suivi des écarts dans le temps ;

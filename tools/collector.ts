@@ -3,6 +3,7 @@
 import { chmod, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { collectInventory } from "../lib/collector.ts";
+import type { OciVerificationPolicy } from "../lib/oci-provenance.ts";
 import { scanComponentsWithOsv } from "../lib/osv.ts";
 import type { ProvenancePolicy } from "../lib/provenance.ts";
 import { createCycloneDxReport } from "../lib/supply-chain.ts";
@@ -11,6 +12,12 @@ type CliOptions = {
   additionalPaths: string[];
   lockfilePaths: string[];
   output: string;
+  ociBackend?: "cosign" | "github";
+  ociIdentity?: string;
+  ociIssuer?: string;
+  ociRepository?: string;
+  ociVerificationPolicy?: OciVerificationPolicy;
+  ociVerifierExecutable?: string;
   osv: boolean;
   probe: boolean;
   provenanceIdentity?: string;
@@ -21,6 +28,7 @@ type CliOptions = {
   stdout: boolean;
   timeoutMs: number;
   verifyProvenance: boolean;
+  verifyOciProvenance: boolean;
   workspace?: string;
 };
 
@@ -47,6 +55,14 @@ Options:
                          Exige cet émetteur de certificat Sigstore
   --provenance-identity <regexp>
                          Exige cette identité URI dans le certificat Sigstore
+  --oci-cosign           Vérifie signatures et provenance OCI avec Cosign
+  --oci-issuer <url>     Émetteur OIDC attendu pour la signature OCI
+  --oci-identity <regexp>
+                         Identité attendue du certificat Cosign
+  --cosign-path <fichier>
+                         Chemin facultatif vers cosign ou cosign.exe
+  --oci-github-repo <owner/repo>
+                         Vérifie l’attestation OCI liée à ce dépôt GitHub
   --sbom [fichier]       Produit aussi un SBOM CycloneDX 1.7
   --timeout <ms>         Délai du probe, entre 500 et 15000 ms (défaut : 5000)
   --output <fichier>     Fichier produit (défaut : mcp-inventory.json)
@@ -59,6 +75,8 @@ Garanties du collecteur :
   - aucun en-tête d’authentification découvert n’est envoyé ;
   - avec --osv, seuls les PURL versionnés sont envoyés à OSV.dev ;
   - avec --provenance, seuls nom, version et digest sont rapprochés du registre npm ;
+  - la vérification OCI transmet uniquement la référence verrouillée au vérificateur choisi ;
+  - aucune image n’est téléchargée ou exécutée par Docker, Podman ou nerdctl ;
   - aucun serveur stdio ni outil MCP n’est exécuté.`;
 }
 
@@ -80,6 +98,7 @@ function parseArguments(args: string[]): CliOptions {
     scanLockfiles: true,
     stdout: false,
     timeoutMs: 5_000,
+    verifyOciProvenance: false,
     verifyProvenance: false,
   };
 
@@ -114,6 +133,41 @@ function parseArguments(args: string[]): CliOptions {
     if (argument === "--provenance-identity") {
       options.provenanceIdentity = readValue(args, index, argument);
       options.verifyProvenance = true;
+      index += 1;
+      continue;
+    }
+    if (argument === "--oci-cosign") {
+      options.ociBackend = "cosign";
+      options.verifyOciProvenance = true;
+      continue;
+    }
+    if (argument === "--oci-issuer") {
+      options.ociIssuer = readValue(args, index, argument);
+      options.ociBackend = "cosign";
+      options.verifyOciProvenance = true;
+      index += 1;
+      continue;
+    }
+    if (argument === "--oci-identity") {
+      options.ociIdentity = readValue(args, index, argument);
+      options.ociBackend = "cosign";
+      options.verifyOciProvenance = true;
+      index += 1;
+      continue;
+    }
+    if (argument === "--cosign-path") {
+      options.ociVerifierExecutable = resolve(
+        readValue(args, index, argument),
+      );
+      options.ociBackend = "cosign";
+      options.verifyOciProvenance = true;
+      index += 1;
+      continue;
+    }
+    if (argument === "--oci-github-repo") {
+      options.ociRepository = readValue(args, index, argument);
+      options.ociBackend = "github";
+      options.verifyOciProvenance = true;
       index += 1;
       continue;
     }
@@ -190,6 +244,51 @@ function parseArguments(args: string[]): CliOptions {
     options.provenancePolicy = {
       certificateIssuer: options.provenanceIssuer,
       certificateIdentityURI: options.provenanceIdentity,
+    };
+  }
+  if (
+    options.ociRepository &&
+    (options.ociIssuer || options.ociIdentity || options.ociVerifierExecutable)
+  ) {
+    throw new Error(
+      "--oci-github-repo ne peut pas être combiné avec les options Cosign.",
+    );
+  }
+  if (options.ociBackend === "cosign") {
+    if (!options.ociIssuer || !options.ociIdentity) {
+      throw new Error(
+        "--oci-cosign exige --oci-issuer et --oci-identity.",
+      );
+    }
+    const issuer = new URL(options.ociIssuer);
+    if (issuer.protocol !== "https:") {
+      throw new Error("--oci-issuer doit être une URL HTTPS.");
+    }
+    try {
+      new RegExp(options.ociIdentity);
+    } catch {
+      throw new Error(
+        "--oci-identity doit être une expression régulière valide.",
+      );
+    }
+    options.ociVerificationPolicy = {
+      kind: "cosign",
+      certificateIssuer: options.ociIssuer,
+      certificateIdentityURI: options.ociIdentity,
+      predicateType: "slsaprovenance1",
+    };
+  } else if (options.ociBackend === "github") {
+    if (
+      !options.ociRepository ||
+      !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(options.ociRepository)
+    ) {
+      throw new Error(
+        "--oci-github-repo doit utiliser le format owner/repository.",
+      );
+    }
+    options.ociVerificationPolicy = {
+      kind: "github",
+      repository: options.ociRepository,
     };
   }
   return options;
@@ -280,6 +379,7 @@ async function main() {
     0,
   );
   const provenance = inventory.provenanceScan;
+  const oci = inventory.ociVerification;
   process.stderr.write(
     [
       `${discovered} serveur${discovered > 1 ? "s" : ""} découvert${discovered > 1 ? "s" : ""}.`,
@@ -296,6 +396,9 @@ async function main() {
       options.verifyProvenance
         ? `${provenance?.registrySignaturesVerified ?? 0} signature${provenance?.registrySignaturesVerified === 1 ? "" : "s"} npm et ${provenance?.slsaProvenanceVerified ?? 0} provenance${provenance?.slsaProvenanceVerified === 1 ? "" : "s"} SLSA vérifiée${provenance?.slsaProvenanceVerified === 1 ? "" : "s"}.`
         : "Vérification de provenance non demandée.",
+      options.verifyOciProvenance
+        ? `${oci?.signaturesVerified ?? 0} signature${oci?.signaturesVerified === 1 ? "" : "s"} OCI et ${oci?.slsaProvenanceVerified ?? 0} provenance${oci?.slsaProvenanceVerified === 1 ? "" : "s"} OCI vérifiée${oci?.slsaProvenanceVerified === 1 ? "" : "s"}.`
+        : "Vérification OCI non demandée.",
       options.stdout ? "" : `Inventaire : ${options.output}`,
       options.sbomOutput ? `SBOM : ${options.sbomOutput}` : "",
     ]
@@ -303,7 +406,11 @@ async function main() {
       .join(" "),
   );
   process.stderr.write("\n");
-  if (inventory.vulnerabilityScan?.status === "error") {
+  if (
+    inventory.vulnerabilityScan?.status === "error" ||
+    inventory.provenanceScan?.status === "error" ||
+    inventory.ociVerification?.status === "error"
+  ) {
     process.exitCode = 2;
   }
 }

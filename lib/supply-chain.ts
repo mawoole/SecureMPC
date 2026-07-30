@@ -32,7 +32,10 @@ export type VerificationState =
   | "not-applicable";
 
 export type ComponentProvenance = {
-  provider: "npm-registry-sigstore";
+  provider:
+    | "npm-registry-sigstore"
+    | "oci-cosign"
+    | "oci-github-attestation";
   checkedAt: string;
   registrySignature: VerificationState;
   slsaProvenance: VerificationState;
@@ -472,7 +475,7 @@ export function createCycloneDxReport(
           {
             type: "application",
             name: "MCP Sentinel",
-            version: "1.3.0",
+            version: "1.4.0",
           },
         ],
       },
@@ -558,6 +561,10 @@ export function createCycloneDxReport(
             : []),
           ...(component.provenance
             ? [
+                {
+                  name: "mcp-sentinel:provenance-provider",
+                  value: component.provenance.provider,
+                },
                 {
                   name: "mcp-sentinel:registry-signature",
                   value: component.provenance.registrySignature,

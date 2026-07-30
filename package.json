@@ -13,7 +13,7 @@
     "collect:sbom": "node --experimental-strip-types tools/collector.ts --sbom",
     "collect:security": "node --experimental-strip-types tools/collector.ts --probe --osv --provenance --sbom",
     "test": "npm run build && npm run test:unit && npm run test:rendered",
-    "test:unit": "node --experimental-strip-types --test tests/audit-engine.test.ts tests/collector.test.ts tests/lockfiles.test.ts tests/osv.test.ts tests/provenance.test.ts tests/supply-chain.test.ts tests/workspaces.test.ts",
+    "test:unit": "node --experimental-strip-types --test tests/audit-engine.test.ts tests/collector.test.ts tests/lockfiles.test.ts tests/oci-provenance.test.ts tests/osv.test.ts tests/provenance.test.ts tests/supply-chain.test.ts tests/workspaces.test.ts",
     "test:rendered": "node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .vite",
     "db:generate": "drizzle-kit generate"
