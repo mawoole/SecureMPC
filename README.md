@@ -33,6 +33,7 @@ directement applicables.
   verrouillées par digest, avec plusieurs politiques sélectionnées par préfixe ;
 - génération hors ligne de politiques d’admission Kubernetes Sigstore à partir
   des mêmes identités OCI ;
+- validation CI déterministe des bundles Kubernetes générés ;
 - recherche optionnelle des vulnérabilités connues via OSV.dev ;
 - prise en charge des objets `mcpServers` utilisés par Claude Desktop, Cursor
   et VS Code ;
@@ -414,6 +415,28 @@ identités, testez d’abord les commandes `kubectl --dry-run=server` générée
 activez un namespace de préproduction puis vérifiez qu’une image non conforme
 est bien refusée.
 
+#### Validation hors ligne et CI
+
+Un bundle existant peut être comparé à sa politique source sans contacter de
+cluster, de registre ou de service externe :
+
+```bash
+npm run validate:admission -- \
+  --policy-file ./examples/oci-policies.json \
+  --namespace production \
+  --bundle ./kubernetes-admission
+```
+
+Le validateur refuse les liens symboliques, sous-dossiers, fichiers inattendus,
+documents YAML invalides et ressources Kubernetes incomplètes. Il régénère
+ensuite le résultat attendu et compare chaque fichier octet par octet avant de
+calculer une empreinte SHA-256 du bundle complet.
+
+Le workflow GitHub Actions génère et valide un bundle d’exemple à chaque pull
+request et mise à jour de `main`. Une modification du générateur, des identités,
+des versions épinglées ou des instructions d’application qui rendrait le bundle
+incohérent fait donc échouer la CI.
+
 ### Vulnérabilités connues avec OSV
 
 L’analyse OSV est explicite et ne concerne que les composants dont la version
@@ -492,6 +515,7 @@ lib/
   collector.ts     Découverte, redaction et probe MCP passif
   lockfiles.ts     Graphes package-lock, pnpm, Yarn, uv et Poetry
   kubernetes-admission.ts Génération sûre des politiques d’admission
+  kubernetes-admission-validation.ts Validation déterministe des bundles
   oci-provenance.ts Vérification OCI bornée via Cosign ou GitHub
   osv.ts           Client OSV limité aux PURL versionnés
   provenance.ts    Signatures npm et attestations SLSA/Sigstore
@@ -507,6 +531,7 @@ tests/
   finding-exceptions.test.ts Tests d’expiration, révocation et exports
   collector.test.ts        Tests du collecteur et du protocole passif
   kubernetes-admission.test.ts Tests YAML, identités et préfixes Kubernetes
+  kubernetes-admission-validation.test.ts Tests d’intégrité des bundles
   lockfiles.test.ts        Tests des graphes npm, pnpm, Yarn, uv et Poetry
   oci-provenance.test.ts    Tests Cosign/GitHub, identité et digests OCI
   osv.test.ts              Tests du client OSV et de ses limites réseau
@@ -536,6 +561,7 @@ public/
 | `npm run collect -- --oci-github-repo <owner/repo>` | Vérifie une attestation OCI GitHub liée au dépôt attendu |
 | `npm run collect -- --oci-policy-file <fichier>` | Applique plusieurs politiques OCI par préfixe, sans fallback implicite |
 | `npm run generate:admission -- --policy-file <fichier> --namespace <nom>` | Génère un bundle Kubernetes Sigstore sans contacter le cluster |
+| `npm run validate:admission -- --policy-file <fichier> --namespace <nom> --bundle <dossier>` | Valide hors ligne un bundle Kubernetes généré |
 | `npm run collect -- --lockfile <fichier>` | Ajoute un lockfile explicite |
 | `npm run collect -- --no-lockfiles` | Désactive la découverte des lockfiles |
 | `npm run lint` | Vérifie les règles de qualité du code |
@@ -580,7 +606,6 @@ l’application et vérifie le HTML produit.
 
 ## Prochaines étapes possibles
 
-- validation CI des bundles Kubernetes générés ;
 - export d’un rapport PDF ;
 - historique persistant et suivi des écarts dans le temps ;
 - intégration CI pour bloquer les configurations à haut risque.
