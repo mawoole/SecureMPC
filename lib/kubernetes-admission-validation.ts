@@ -78,9 +78,9 @@ function validateClusterImagePolicyDocument(
     manifest.apiVersion !== "policy.sigstore.dev/v1beta1" ||
     manifest.kind !== "ClusterImagePolicy" ||
     typeof metadata.name !== "string" ||
-    typeof annotations["mcp-sentinel.dev/policy-id"] !== "string" ||
+    typeof annotations["secure-mpc.dev/policy-id"] !== "string" ||
     !["signature", "slsa"].includes(
-      String(annotations["mcp-sentinel.dev/required-proof"]),
+      String(annotations["secure-mpc.dev/required-proof"]),
     ) ||
     !Array.isArray(spec.images) ||
     !spec.images.length ||
@@ -88,7 +88,7 @@ function validateClusterImagePolicyDocument(
     !spec.authorities.length
   ) {
     throw new Error(
-      `${context} n’est pas une ClusterImagePolicy MCP Sentinel complète.`,
+      `${context} n’est pas une ClusterImagePolicy Secure MPC complète.`,
     );
   }
 }

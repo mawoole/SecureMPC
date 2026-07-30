@@ -34,6 +34,14 @@ import {
   createCycloneDxReport,
   type ComponentPinStatus,
 } from "../lib/supply-chain";
+import {
+  AUDIT_HISTORY_LIMIT,
+  createAuditHistoryPayload,
+  parseAuditHistoryRecords,
+  type AuditHistoryRecord,
+  type AuditHistorySource,
+} from "../lib/audit-history";
+import { AuditHistoryView } from "./audit-history-view";
 
 type View = "overview" | "servers" | "rules" | "history";
 
@@ -46,7 +54,9 @@ type ExceptionDraft = {
   maximumExpiresOn: string;
 };
 
-const RISK_EXCEPTIONS_STORAGE_KEY = "mcp-sentinel.risk-exceptions.v1";
+const RISK_EXCEPTIONS_STORAGE_KEY = "secure-mpc.risk-exceptions.v1";
+const LEGACY_RISK_EXCEPTIONS_STORAGE_KEY =
+  "mcp-sentinel.risk-exceptions.v1";
 
 function dateInputValue(date: Date): string {
   const offset = date.getTimezoneOffset() * 60_000;
@@ -398,14 +408,34 @@ export default function Home() {
   const [exceptionDraft, setExceptionDraft] =
     useState<ExceptionDraft | null>(null);
   const [exceptionError, setExceptionError] = useState("");
+  const [auditHistory, setAuditHistory] = useState<AuditHistoryRecord[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState("");
 
   useEffect(() => {
     const loadTimer = window.setTimeout(() => {
-      setRiskExceptions(
-        parseRiskExceptions(
-          window.localStorage.getItem(RISK_EXCEPTIONS_STORAGE_KEY),
-        ),
+      const savedExceptions = window.localStorage.getItem(
+        RISK_EXCEPTIONS_STORAGE_KEY,
       );
+      const legacyExceptions = window.localStorage.getItem(
+        LEGACY_RISK_EXCEPTIONS_STORAGE_KEY,
+      );
+      setRiskExceptions(
+        parseRiskExceptions(savedExceptions ?? legacyExceptions),
+      );
+      if (!savedExceptions && legacyExceptions) {
+        try {
+          window.localStorage.setItem(
+            RISK_EXCEPTIONS_STORAGE_KEY,
+            legacyExceptions,
+          );
+          window.localStorage.removeItem(
+            LEGACY_RISK_EXCEPTIONS_STORAGE_KEY,
+          );
+        } catch {
+          // The persistence effect below will retry without blocking startup.
+        }
+      }
       setExceptionsLoaded(true);
     }, 0);
     return () => window.clearTimeout(loadTimer);
@@ -429,6 +459,41 @@ export default function Home() {
       return () => window.clearTimeout(errorTimer);
     }
   }, [exceptionsLoaded, riskExceptions]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const loadHistory = async () => {
+      try {
+        const response = await fetch("/api/audit-history", {
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+          signal: controller.signal,
+        });
+        const body = (await response.json()) as {
+          error?: string;
+          history?: unknown;
+        };
+        if (!response.ok) {
+          throw new Error(body.error || "Historique indisponible.");
+        }
+        setAuditHistory(parseAuditHistoryRecords(body.history));
+        setHistoryError("");
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        setHistoryError(
+          error instanceof Error
+            ? error.message
+            : "Historique temporairement indisponible.",
+        );
+      } finally {
+        if (!controller.signal.aborted) setHistoryLoading(false);
+      }
+    };
+    void loadHistory();
+    return () => controller.abort();
+  }, []);
 
   const metrics = useMemo(() => calculateAuditMetrics(servers), [servers]);
   const actionableFindings = useMemo(
@@ -489,6 +554,43 @@ export default function Home() {
     [actionableFindings],
   );
 
+  const persistAuditHistory = async (
+    audited: McpServer[],
+    source: AuditHistorySource,
+  ) => {
+    try {
+      const response = await fetch("/api/audit-history", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(createAuditHistoryPayload(audited, source)),
+      });
+      const body = (await response.json()) as {
+        error?: string;
+        record?: unknown;
+      };
+      if (!response.ok) {
+        throw new Error(body.error || "Historique indisponible.");
+      }
+      const [record] = parseAuditHistoryRecords([body.record]);
+      setAuditHistory((current) =>
+        [
+          record,
+          ...current.filter((entry) => entry.id !== record.id),
+        ].slice(0, AUDIT_HISTORY_LIMIT),
+      );
+      setHistoryError("");
+    } catch (error) {
+      setHistoryError(
+        error instanceof Error
+          ? error.message
+          : "L’audit est terminé, mais son historique n’a pas été enregistré.",
+      );
+    }
+  };
+
   const runAudit = () => {
     setScanning(true);
     window.setTimeout(() => {
@@ -499,12 +601,17 @@ export default function Home() {
           minute: "2-digit",
         }).format(new Date()),
       );
+      void persistAuditHistory(servers, "manual");
       setToast(`${servers.length} serveurs analysés — rapport actualisé`);
       window.setTimeout(() => setToast(""), 3000);
     }, 950);
   };
 
-  const applyAuditedServers = (audited: McpServer[], source: string) => {
+  const applyAuditedServers = (
+    audited: McpServer[],
+    source: string,
+    historySource: AuditHistorySource,
+  ) => {
     if (!audited.length) {
       throw new Error("La configuration ne contient aucun serveur.");
     }
@@ -514,6 +621,7 @@ export default function Home() {
     setFilter("all");
     setSearch("");
     setLastAudit("à l’instant");
+    void persistAuditHistory(audited, historySource);
     setToast(
       `${audited.length} serveur${audited.length > 1 ? "s" : ""} ${source} et analysé${audited.length > 1 ? "s" : ""} localement`,
     );
@@ -527,6 +635,7 @@ export default function Home() {
       applyAuditedServers(
         audited,
         `importé${audited.length > 1 ? "s" : ""}`,
+        "import",
       );
     } catch (error) {
       setImportError(
@@ -570,6 +679,7 @@ export default function Home() {
       applyAuditedServers(
         audited,
         `découvert${audited.length > 1 ? "s" : ""}`,
+        "discovery",
       );
     } catch (error) {
       setImportError(
@@ -661,6 +771,36 @@ export default function Home() {
     window.setTimeout(() => setToast(""), 3000);
   };
 
+  const clearAuditHistory = async () => {
+    if (
+      !window.confirm(
+        "Effacer définitivement votre historique d’audits enregistré ?",
+      )
+    ) {
+      return;
+    }
+    try {
+      const response = await fetch("/api/audit-history", {
+        method: "DELETE",
+        headers: { Accept: "application/json" },
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(body.error || "Suppression impossible.");
+      }
+      setAuditHistory([]);
+      setHistoryError("");
+      setToast("Historique d’audits effacé");
+      window.setTimeout(() => setToast(""), 2600);
+    } catch (error) {
+      setHistoryError(
+        error instanceof Error
+          ? error.message
+          : "L’historique n’a pas pu être supprimé.",
+      );
+    }
+  };
+
   const exportReport = async (
     format: "json" | "sarif" | "cyclonedx" | "pdf",
   ) => {
@@ -708,8 +848,8 @@ export default function Home() {
         const date = generatedAt.toISOString().slice(0, 10);
         fileName =
           format === "cyclonedx"
-            ? `mcp-sentinel-${date}.cdx.json`
-            : `mcp-sentinel-${date}.${format}`;
+            ? `secure-mpc-${date}.cdx.json`
+            : `secure-mpc-${date}.${format}`;
         successMessage =
           format === "sarif"
             ? "Rapport SARIF exporté"
@@ -749,7 +889,7 @@ export default function Home() {
         <div className="brand">
           <BrandMark />
           <div>
-            <strong>MCP Sentinel</strong>
+            <strong>Secure MPC</strong>
             <span>Security workspace</span>
           </div>
         </div>
@@ -981,7 +1121,7 @@ export default function Home() {
                 <strong>Analyse locale et respectueuse de vos secrets</strong>
                 <p>
                   Les configurations importées sont analysées dans votre
-                  navigateur. MCP Sentinel n’affiche jamais les valeurs
+                  navigateur. Secure MPC n’affiche jamais les valeurs
                   sensibles détectées.
                 </p>
               </div>
@@ -1065,76 +1205,17 @@ export default function Home() {
                 <span className="section-kicker">TRACES D’AUDIT</span>
                 <h2>Suivez la réduction du risque.</h2>
                 <p>
-                  Cette première version conserve la session courante. Le
-                  branchement à un historique persistant pourra être ajouté
-                  ensuite.
+                  Chaque import, découverte ou nouvel audit ajoute un point de
+                  comparaison durable sans enregistrer vos configurations.
                 </p>
               </div>
             </div>
-            <div className="history-layout">
-              <article className="trend-card">
-                <div className="trend-head">
-                  <div>
-                    <span>Score de posture</span>
-                    <strong>+18 pts</strong>
-                  </div>
-                  <small>30 derniers jours</small>
-                </div>
-                <div className="trend-visual" aria-label="Tendance du score de 54 à 72">
-                  {[54, 57, 61, 60, 66, 69, metrics.score].map(
-                    (value, index) => (
-                      <span
-                        key={`${value}-${index}`}
-                        style={{ height: `${value}%` }}
-                      >
-                        {index === 6 && <b>{value}</b>}
-                      </span>
-                    ),
-                  )}
-                </div>
-                <div className="trend-axis">
-                  <span>30 juin</span>
-                  <span>Aujourd’hui</span>
-                </div>
-              </article>
-              <div className="timeline-card">
-                {[
-                  {
-                    date: "Aujourd’hui",
-                    title: "Audit complet du parc",
-                    text: `${servers.length} serveurs · ${actionableFindings.length} corrections ouvertes`,
-                    tone: "green",
-                  },
-                  {
-                    date: "22 juillet",
-                    title: "2 secrets retirés",
-                    text: "GitHub MCP · Sentry Reader",
-                    tone: "cobalt",
-                  },
-                  {
-                    date: "14 juillet",
-                    title: "Référentiel mis à jour",
-                    text: "Ajout des contrôles supply chain",
-                    tone: "amber",
-                  },
-                  {
-                    date: "30 juin",
-                    title: "Premier inventaire",
-                    text: "12 serveurs découverts · score 54/100",
-                    tone: "gray",
-                  },
-                ].map((entry) => (
-                  <article className="timeline-entry" key={entry.date}>
-                    <span className={`timeline-dot ${entry.tone}`} />
-                    <time>{entry.date}</time>
-                    <div>
-                      <strong>{entry.title}</strong>
-                      <p>{entry.text}</p>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </div>
+            <AuditHistoryView
+              history={auditHistory}
+              loading={historyLoading}
+              error={historyError}
+              onClear={clearAuditHistory}
+            />
             <article className="exception-register">
               <div className="exception-register-head">
                 <div>

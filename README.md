@@ -1,10 +1,10 @@
-# MCP Sentinel
+# Secure MPC
 
 [![CI](https://github.com/mawoole/SecureMPC/actions/workflows/ci.yml/badge.svg)](https://github.com/mawoole/SecureMPC/actions/workflows/ci.yml)
 
-![Aperçu MCP Sentinel](public/og.png)
+![Aperçu Secure MPC](public/og.png)
 
-MCP Sentinel est une application web d’audit de configurations MCP
+Secure MPC est une application web d’audit de configurations MCP
 ([Model Context Protocol](https://modelcontextprotocol.io/)). Elle transforme un
 inventaire de serveurs difficile à relire en une posture de sécurité claire :
 score global, risques prioritaires, explication de l’impact et correctifs
@@ -48,6 +48,7 @@ directement applicables.
 - score de sécurité global et par serveur ;
 - priorisation par criticité ;
 - remédiations expliquées avec extraits de configuration copiables ;
+- historique persistant des scores et écarts, comparé audit par audit ;
 - exceptions de risque motivées, attribuées, datées et révocables ;
 - export de rapports PDF, JSON, SARIF et d’un SBOM CycloneDX 1.7 ;
 - vues dédiées aux serveurs, règles et audits ;
@@ -62,6 +63,10 @@ par un collecteur local explicite :
 - les valeurs sensibles détectées ne sont jamais affichées ;
 - aucun secret n’est enregistré dans le stockage du navigateur ;
 - le registre d’exceptions reste sur l’appareil dans le stockage du navigateur ;
+- l’historique distant conserve uniquement des compteurs agrégés par règle,
+  associés à un identifiant utilisateur pseudonymisé ;
+- aucun nom de serveur, chemin, configuration, extrait de correction ou secret
+  n’est envoyé avec cet historique ;
 - le rapport PDF est composé et téléchargé localement, sans envoi du contenu ;
 - les secrets concrets sont remplacés par `${REDACTED}` avant l’écriture de
   l’inventaire ;
@@ -126,7 +131,7 @@ npm run build
 ## Exceptions de risque
 
 Une correction qui ne peut pas être appliquée immédiatement peut être placée
-sous exception depuis le détail de l’écart. MCP Sentinel exige :
+sous exception depuis le détail de l’écart. Secure MPC exige :
 
 - un motif explicite et, idéalement, une référence de suivi ;
 - un responsable identifié ;
@@ -140,6 +145,19 @@ Le registre est conservé uniquement dans le navigateur courant. Le rapport JSON
 1.1 inclut les exceptions actives, expirées et révoquées. L’export SARIF conserve
 le résultat et ajoute une suppression `external/accepted` documentée pour les
 seules exceptions actives.
+
+## Historique des audits
+
+Chaque import, découverte locale ou relance d’audit ajoute un point de posture
+dans la base D1 du site. L’historique affiche les 60 points les plus récents et
+compare le score, le total d’écarts, les corrections résolues et les nouveaux
+constats depuis le point précédent.
+
+La synchronisation ne transmet que le score, le nombre de serveurs, les
+compteurs de sévérité et le nombre de constats par code de règle. L’adresse de
+l’utilisateur authentifié sert uniquement à calculer côté serveur une clé
+pseudonymisée ; elle n’est pas stockée dans la table. L’utilisateur peut effacer
+définitivement son historique depuis cette vue.
 
 ## Rapport PDF
 
@@ -230,7 +248,7 @@ npm run collect -- --sbom
 
 ### Inventaire supply chain et SBOM
 
-MCP Sentinel reconnaît les lanceurs suivants sans les exécuter :
+Secure MPC reconnaît les lanceurs suivants sans les exécuter :
 
 - npm : `npx`, `npm exec`, `pnpm dlx`, `yarn dlx` et `bunx` ;
 - Python : `uvx` et `pipx run` ;
@@ -299,7 +317,7 @@ et rattachés aux serveurs, directs comme transitifs :
 npm run collect -- --provenance
 ```
 
-Pour chaque composant, MCP Sentinel :
+Pour chaque composant, Secure MPC :
 
 1. exige que l’intégrité SRI du lockfile corresponde à `dist.integrity` ;
 2. vérifie la signature ECDSA du registre sur
@@ -397,7 +415,7 @@ la voie GitHub continue d’utiliser `gh`.
 
 Les références d’images peuvent être transmises au registre et au service de
 confiance choisi. Pour un registre privé, `cosign` ou `gh` peut réutiliser ses
-propres identifiants déjà configurés ; MCP Sentinel ne lit ni ne conserve ces
+propres identifiants déjà configurés ; Secure MPC ne lit ni ne conserve ces
 identifiants.
 
 ### Admission Kubernetes
@@ -535,7 +553,7 @@ exploitable.
 - **Next.js 16 / React 19** pour l’interface ;
 - **TypeScript** pour le moteur d’analyse et les composants ;
 - **vinext / Vite** pour la construction ;
-- aucune base de données pour la première version ;
+- **Cloudflare D1** pour les synthèses historiques pseudonymisées ;
 - aucune API distante requise pour l’analyse statique ; OSV reste optionnel.
 
 Principaux fichiers :
@@ -547,6 +565,7 @@ app/
   layout.tsx     Métadonnées et partage social
 lib/
   audit-engine.ts  Règles, scoring et exports JSON/SARIF
+  audit-history.ts Agrégation confidentielle et comparaison des audits
   finding-exceptions.ts Registre local et exports des risques acceptés
   collector.ts     Découverte, redaction et probe MCP passif
   lockfiles.ts     Graphes package-lock, pnpm, Yarn, uv et Poetry
@@ -624,7 +643,7 @@ ou élevé est détecté :
 ```bash
 npm run audit:ci -- \
   --path ./.mcp.json \
-  --sarif ./mcp-sentinel.sarif
+  --sarif ./secure-mpc.sarif
 ```
 
 Le seuil peut être adapté avec `--fail-on critical|high|medium`. Utilisez
@@ -650,10 +669,10 @@ steps:
   - name: Audit MCP
     run: npm run audit:ci -- --path ./.mcp.json --sarif
   - name: Publier le rapport SARIF
-    if: always() && hashFiles('mcp-sentinel.sarif') != ''
+    if: always() && hashFiles('secure-mpc.sarif') != ''
     uses: github/codeql-action/upload-sarif@v4
     with:
-      sarif_file: mcp-sentinel.sarif
+      sarif_file: secure-mpc.sarif
 ```
 
 Les codes de sortie sont stables : `0` pour un contrôle réussi, `1` pour une
@@ -684,15 +703,16 @@ incomplète et que le seuil est aussi dépassé, le refus de politique (`3`) pri
   écosystèmes ; le statut de l’analyse doit donc être vérifié dans l’inventaire ;
 - elle ne confirme pas les permissions effectives côté GitHub, base de données,
   OAuth ou système de fichiers ;
-- l’historique affiché est illustratif et n’est pas encore persistant ;
+- l’historique est limité à 60 synthèses agrégées et ne permet pas de rouvrir
+  l’inventaire complet d’un audit précédent ;
 - le registre d’exceptions est local au navigateur et n’est pas synchronisé
   entre les utilisateurs ou les appareils ;
 - le catalogue de règles devra évoluer avec les spécifications et pratiques MCP.
 
 ## Prochaines étapes possibles
 
-- historique persistant et suivi des écarts dans le temps ;
 - politiques CI différenciées par environnement ou répertoire.
+- export CSV de la tendance de posture et des écarts agrégés.
 
 ## Contribution
 

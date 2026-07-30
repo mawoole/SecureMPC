@@ -18,7 +18,7 @@ type CliOptions = {
 };
 
 function help(): string {
-  return `MCP Sentinel — Générateur d’admission Kubernetes
+  return `Secure MPC — Générateur d’admission Kubernetes
 
 Usage:
   npm run generate:admission -- \\

@@ -60,7 +60,7 @@ test("creates a paginated PDF audit with actionable and accepted risks", () => {
   assert.match(suffix, /%%EOF/);
   assert.ok(report.bytes.length > 8_000);
   assert.ok(report.pages >= 2);
-  assert.equal(report.fileName, "mcp-sentinel-audit-2026-07-30.pdf");
+  assert.equal(report.fileName, "secure-mpc-audit-2026-07-30.pdf");
   assert.deepEqual(report.summary, {
     servers: 1,
     score: 34,

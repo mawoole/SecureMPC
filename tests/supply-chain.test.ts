@@ -161,7 +161,7 @@ test("generates a deduplicated CycloneDX 1.7 dependency graph", () => {
   assert.equal(report.vulnerabilities?.[0].affects.length, 1);
   assert.match(
     JSON.stringify(report),
-    /mcp-sentinel:provenance-policy/,
+    /secure-mpc:provenance-policy/,
   );
   assert.match(
     report.vulnerabilities?.[0].recommendation ?? "",

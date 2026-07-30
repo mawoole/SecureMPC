@@ -146,10 +146,10 @@ export function createAuditPdfReport(
     unit: "mm",
   });
   document.setProperties({
-    title: "MCP Sentinel - Rapport d'audit de sécurité MCP",
+    title: "Secure MPC - Rapport d'audit de sécurité MCP",
     subject: "Posture de sécurité et remédiations des serveurs MCP",
-    author: "MCP Sentinel",
-    creator: "MCP Sentinel",
+    author: "Secure MPC",
+    creator: "Secure MPC",
     keywords: "MCP, sécurité, audit, remédiations",
   });
   document.setCreationDate(generatedAt);
@@ -189,7 +189,7 @@ export function createAuditPdfReport(
     setTextColor(document, COLORS.ink);
     document.setFont("helvetica", "bold");
     document.setFontSize(9);
-    document.text("MCP SENTINEL", MARGIN, 15);
+    document.text("SECURE MPC", MARGIN, 15);
     setTextColor(document, COLORS.subtle);
     document.setFont("helvetica", "normal");
     document.setFontSize(7);
@@ -276,7 +276,7 @@ export function createAuditPdfReport(
   document.setFontSize(13);
   document.text("M", MARGIN + 6, 20.2, { align: "center" });
   document.setFontSize(9);
-  document.text("MCP SENTINEL", MARGIN + 17, 17);
+  document.text("SECURE MPC", MARGIN + 17, 17);
   document.setFont("helvetica", "normal");
   document.setFontSize(7);
   document.text("SECURITY WORKSPACE", MARGIN + 17, 21.5);
@@ -659,7 +659,7 @@ export function createAuditPdfReport(
     document.setFont("helvetica", "normal");
     document.setFontSize(6.5);
     document.text(
-      `MCP Sentinel - Analyse statique locale - ${safeText(formatDate(generatedAt))}`,
+      `Secure MPC - Analyse statique locale - ${safeText(formatDate(generatedAt))}`,
       MARGIN,
       289,
     );
@@ -670,7 +670,7 @@ export function createAuditPdfReport(
 
   return {
     bytes: new Uint8Array(document.output("arraybuffer")),
-    fileName: `mcp-sentinel-audit-${generatedAt.toISOString().slice(0, 10)}.pdf`,
+    fileName: `secure-mpc-audit-${generatedAt.toISOString().slice(0, 10)}.pdf`,
     pages: totalPages,
     summary,
   };
