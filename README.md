@@ -17,8 +17,8 @@ directement applicables.
 - **TrustMap Audit** applique le référentiel de sécurité, priorise les écarts,
   fournit les correctifs, gère les exceptions et conserve l’historique agrégé.
 - **TrustMap CI** simule une politique sur l’inventaire courant et génère la
-  commande ainsi que le workflow GitHub Actions correspondant, avec SARIF,
-  CycloneDX, OSV et vérification de provenance configurables.
+  commande ainsi qu’un workflow GitHub Actions multi-environnements, avec
+  chemins, seuils, SARIF, CycloneDX, OSV et provenance configurables par profil.
 - **TrustMap Enterprise** mesure la couverture des propriétaires et des preuves,
   présente la posture par équipe et exporte un pack de gouvernance JSON.
 
@@ -65,6 +65,7 @@ connexion à un annuaire d’entreprise.
 - priorisation par criticité ;
 - remédiations expliquées avec extraits de configuration copiables ;
 - historique persistant des scores et écarts, comparé audit par audit ;
+- export CSV chronologique de la posture et des écarts agrégés ;
 - exceptions de risque motivées, attribuées, datées et révocables ;
 - export de rapports PDF, JSON, SARIF et d’un SBOM CycloneDX 1.7 ;
 - vues dédiées aux serveurs, règles et audits ;
@@ -696,6 +697,29 @@ erreur d’entrée ou d’exécution, `2` pour une analyse réseau/provenance
 incomplète et `3` pour une politique CI refusée. Si une analyse distante est
 incomplète et que le seuil est aussi dépassé, le refus de politique (`3`) prime.
 
+### Politiques par environnement et répertoire
+
+TrustMap CI propose trois profils indépendants et modifiables :
+
+| Profil | Chemin initial | Seuil initial | Contrôles réseau |
+| --- | --- | --- | --- |
+| Développement | `./.mcp/development.json` | critique | désactivés |
+| Préproduction | `./.mcp/staging.json` | élevé | OSV et provenance |
+| Production | `./.mcp/production.json` | modéré | OSV et provenance |
+
+Chaque profil peut être inclus ou exclu du workflow. Le générateur produit un
+job GitHub Actions séparé par environnement, des noms d’artefacts distincts et
+une catégorie SARIF dédiée. Les chemins contenant des caractères de contrôle ou
+des opérateurs shell sont refusés avant la génération.
+
+### Exporter la tendance d’audit
+
+Dans **TrustMap Audit → Historique & exceptions**, le bouton `Exporter CSV`
+produit localement un fichier UTF-8 compatible avec Excel. Les points sont
+ordonnés chronologiquement et incluent les variations de score, les écarts
+introduits/résolus ainsi que les compteurs agrégés par règle. Aucun nom de
+serveur, chemin de configuration, extrait ou secret n’est exporté.
+
 ## Limites actuelles
 
 - la découverte doit être lancée explicitement sur chaque poste à inventorier ;
@@ -727,8 +751,8 @@ incomplète et que le seuil est aussi dépassé, le refus de politique (`3`) pri
 
 ## Prochaines étapes possibles
 
-- politiques CI différenciées par environnement ou répertoire.
-- export CSV de la tendance de posture et des écarts agrégés.
+- signature et vérification des fichiers de politique CI exportés ;
+- synchronisation chiffrée des exceptions entre membres d’un même espace.
 
 ## Contribution
 

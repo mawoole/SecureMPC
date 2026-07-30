@@ -9,6 +9,7 @@ type AuditHistoryViewProps = {
   loading: boolean;
   error: string;
   onClear: () => void;
+  onExportCsv: () => void;
 };
 
 const sourceLabel: Record<AuditHistorySource, string> = {
@@ -34,6 +35,7 @@ export function AuditHistoryView({
   loading,
   error,
   onClear,
+  onExportCsv,
 }: AuditHistoryViewProps) {
   const trend = [...history].slice(0, 12).reverse();
   const latest = history[0];
@@ -79,9 +81,17 @@ export function AuditHistoryView({
             Synthèses pseudonymisées · configurations exclues
           </small>
         </div>
-        <button className="button secondary compact" onClick={onClear}>
-          Effacer l’historique
-        </button>
+        <div className="history-actions">
+          <button
+            className="button secondary compact"
+            onClick={onExportCsv}
+          >
+            Exporter CSV
+          </button>
+          <button className="button secondary compact" onClick={onClear}>
+            Effacer l’historique
+          </button>
+        </div>
       </div>
 
       <div className="history-layout">

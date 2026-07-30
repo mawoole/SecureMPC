@@ -37,6 +37,7 @@ import {
 import {
   AUDIT_HISTORY_LIMIT,
   createAuditHistoryPayload,
+  createAuditHistoryCsv,
   parseAuditHistoryRecords,
   type AuditHistoryRecord,
   type AuditHistorySource,
@@ -811,6 +812,20 @@ export default function Home() {
     }
   };
 
+  const exportAuditHistoryCsv = () => {
+    const csv = createAuditHistoryCsv(auditHistory);
+    const downloadUrl = URL.createObjectURL(
+      new Blob([csv], { type: "text/csv;charset=utf-8" }),
+    );
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = `mcp-trustmap-history-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(downloadUrl);
+    setToast(`${auditHistory.length} points d’audit exportés en CSV`);
+    window.setTimeout(() => setToast(""), 2600);
+  };
+
   const exportReport = async (
     format: "json" | "sarif" | "cyclonedx" | "pdf",
   ) => {
@@ -1246,6 +1261,7 @@ export default function Home() {
               loading={historyLoading}
               error={historyError}
               onClear={clearAuditHistory}
+              onExportCsv={exportAuditHistoryCsv}
             />
             <article className="exception-register">
               <div className="exception-register-head">

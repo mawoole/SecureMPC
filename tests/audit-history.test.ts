@@ -7,6 +7,7 @@ import type {
 import {
   AuditHistoryValidationError,
   compareAuditHistory,
+  createAuditHistoryCsv,
   createAuditHistoryPayload,
   parseAuditHistoryPayload,
   parseAuditHistoryRecords,
@@ -174,4 +175,28 @@ test("parses bounded API history records", () => {
     () => parseAuditHistoryRecords([{ ...entry, createdAt: "invalid" }]),
     AuditHistoryValidationError,
   );
+});
+
+test("exports chronological CSV trends without infrastructure metadata", () => {
+  const previous = {
+    ...record("00000000-0000-4000-8000-000000000010", 55, [
+      { rule: "MCP-SEC-01", severity: "critical" as const, count: 2 },
+    ]),
+    createdAt: "2026-07-29T10:00:00.000Z",
+  };
+  const current = {
+    ...record("00000000-0000-4000-8000-000000000011", 75, [
+      { rule: "MCP-SEC-01", severity: "critical" as const, count: 1 },
+      { rule: "MCP-NET-01", severity: "high" as const, count: 1 },
+    ]),
+    createdAt: "2026-07-30T10:00:00.000Z",
+  };
+
+  const csv = createAuditHistoryCsv([current, previous]);
+
+  assert.ok(csv.startsWith("\uFEFFsep=;\r\n"));
+  assert.match(csv, /audit_id;created_at;source;score/);
+  assert.ok(csv.indexOf(previous.id) < csv.indexOf(current.id));
+  assert.match(csv, /;20;0;1;1;MCP-NET-01:high:1\|MCP-SEC-01:critical:1/);
+  assert.doesNotMatch(csv, /Équipe confidentielle|Chemin confidentiel/);
 });

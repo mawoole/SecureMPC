@@ -1487,6 +1487,101 @@ button.table-row:hover {
   margin-top: 4px;
 }
 
+.policy-profile-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.policy-profile-grid > article {
+  align-items: center;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  display: flex;
+  min-width: 0;
+  padding: 10px;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease;
+}
+
+.policy-profile-grid > article.active {
+  border-color: var(--green);
+  box-shadow: 0 0 0 2px rgba(21, 122, 85, 0.1);
+}
+
+.policy-profile-grid > article.disabled {
+  opacity: 0.55;
+}
+
+.policy-profile-main {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  display: flex;
+  flex: 1;
+  gap: 11px;
+  min-width: 0;
+  padding: 3px;
+  text-align: left;
+}
+
+.policy-profile-main > span {
+  align-items: center;
+  background: var(--green-soft);
+  border-radius: 9px;
+  color: var(--green-dark);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 780;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.policy-profile-main > div {
+  min-width: 0;
+}
+
+.policy-profile-main small {
+  color: var(--subtle);
+  display: block;
+  font-size: 7px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.policy-profile-main strong {
+  display: block;
+  font-size: 11px;
+  margin: 2px 0;
+}
+
+.policy-profile-main p {
+  color: var(--muted);
+  font-size: 8px;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.policy-profile-grid > article > label {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex: 0 0 auto;
+  font-size: 8px;
+  gap: 4px;
+}
+
+.policy-profile-grid > article > label input {
+  accent-color: var(--green);
+}
+
 .policy-builder {
   display: flex;
   flex-direction: column;
@@ -1945,6 +2040,11 @@ button.table-row:hover {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.history-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .history-toolbar small {
@@ -3646,6 +3746,10 @@ button.table-row:hover {
     grid-template-columns: 1fr;
   }
 
+  .policy-profile-grid {
+    grid-template-columns: 1fr;
+  }
+
   .module-kpis article {
     min-height: 94px;
   }
@@ -3673,6 +3777,14 @@ button.table-row:hover {
 
   .owner-row > span:nth-child(2) {
     display: none;
+  }
+
+  .history-actions {
+    width: 100%;
+  }
+
+  .history-actions .button {
+    flex: 1;
   }
 }
 
