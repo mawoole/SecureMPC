@@ -52,7 +52,7 @@ type CliOptions = {
 };
 
 function help(): string {
-  return `Secure MPC Collector
+  return `MCP TrustMap Collector
 
 Usage:
   npm run collect
@@ -87,7 +87,7 @@ Options:
   --oci-policy-file <fichier>
                          Applique plusieurs politiques OCI par préfixe d’image
   --sbom [fichier]       Produit aussi un SBOM CycloneDX 1.7
-  --sarif [fichier]      Produit un rapport SARIF (défaut : secure-mpc.sarif)
+  --sarif [fichier]      Produit un rapport SARIF (défaut : mcp-trustmap.sarif)
   --fail-on <niveau>     Échoue sur critical, high ou medium et niveaux supérieurs
   --require-servers      Échoue si aucun serveur MCP n’est découvert
   --timeout <ms>         Délai du probe, entre 500 et 15000 ms (défaut : 5000)
@@ -233,7 +233,7 @@ function parseArguments(args: string[]): CliOptions {
         options.sarifOutput = resolve(candidate);
         index += 1;
       } else {
-        options.sarifOutput = resolve("secure-mpc.sarif");
+        options.sarifOutput = resolve("mcp-trustmap.sarif");
       }
       continue;
     }

@@ -86,7 +86,7 @@ export type AuditReport = {
   schemaVersion: "1.0";
   generatedAt: string;
   generator: {
-    name: "Secure MPC";
+    name: "MCP TrustMap";
     version: string;
   };
   summary: AuditMetrics & {
@@ -710,7 +710,7 @@ export function auditConfiguration(raw: string): McpServer[] {
       : undefined;
   const isCollectorInventory =
     parsedRecord.schemaVersion === "1.0" &&
-    collector?.name === "Secure MPC Collector" &&
+    collector?.name === "MCP TrustMap Collector" &&
     Array.isArray(parsedRecord.servers);
 
   if (isCollectorInventory) {
@@ -1289,7 +1289,7 @@ export function createAuditReport(
     schemaVersion: "1.0",
     generatedAt: generatedAt.toISOString(),
     generator: {
-      name: "Secure MPC",
+      name: "MCP TrustMap",
       version: "1.0.0",
     },
     summary: {
@@ -1333,7 +1333,7 @@ export function createSarifReport(
       {
         tool: {
           driver: {
-            name: "Secure MPC",
+            name: "MCP TrustMap",
             version: "1.0.0",
             informationUri: "https://github.com/mawoole/SecureMPC",
             rules: [...usedRules.values()].map((rule) => ({

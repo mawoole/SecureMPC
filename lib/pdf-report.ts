@@ -146,10 +146,10 @@ export function createAuditPdfReport(
     unit: "mm",
   });
   document.setProperties({
-    title: "Secure MPC - Rapport d'audit de sécurité MCP",
+    title: "MCP TrustMap - Rapport d'audit de sécurité MCP",
     subject: "Posture de sécurité et remédiations des serveurs MCP",
-    author: "Secure MPC",
-    creator: "Secure MPC",
+    author: "MCP TrustMap",
+    creator: "MCP TrustMap",
     keywords: "MCP, sécurité, audit, remédiations",
   });
   document.setCreationDate(generatedAt);
@@ -659,7 +659,7 @@ export function createAuditPdfReport(
     document.setFont("helvetica", "normal");
     document.setFontSize(6.5);
     document.text(
-      `Secure MPC - Analyse statique locale - ${safeText(formatDate(generatedAt))}`,
+      `MCP TrustMap - Analyse statique locale - ${safeText(formatDate(generatedAt))}`,
       MARGIN,
       289,
     );
@@ -670,7 +670,7 @@ export function createAuditPdfReport(
 
   return {
     bytes: new Uint8Array(document.output("arraybuffer")),
-    fileName: `secure-mpc-audit-${generatedAt.toISOString().slice(0, 10)}.pdf`,
+    fileName: `mcp-trustmap-audit-${generatedAt.toISOString().slice(0, 10)}.pdf`,
     pages: totalPages,
     summary,
   };

@@ -18,7 +18,7 @@ type CliOptions = {
 };
 
 function help(): string {
-  return `Secure MPC — Générateur d’admission Kubernetes
+  return `MCP TrustMap — Générateur d’admission Kubernetes
 
 Usage:
   npm run generate:admission -- \\

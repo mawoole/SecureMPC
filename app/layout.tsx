@@ -20,9 +20,9 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol =
     forwardedProtocol ?? (host.startsWith("localhost") ? "http" : "https");
   const baseUrl = new URL(`${protocol}://${host}`);
-  const title = "Secure MPC — Audit de sécurité MCP";
+  const title = "MCP TrustMap — Cartographie, audit et gouvernance MCP";
   const description =
-    "Analysez la configuration de vos serveurs MCP, priorisez les risques et appliquez des correctifs concrets.";
+    "Découvrez vos serveurs MCP, auditez leur sécurité, appliquez une politique CI et pilotez leur gouvernance.";
 
   return {
     metadataBase: baseUrl,
@@ -37,7 +37,7 @@ export async function generateMetadata(): Promise<Metadata> {
           url: new URL("/og.png", baseUrl).toString(),
           width: 1732,
           height: 908,
-          alt: "Secure MPC — Vos serveurs MCP, sous contrôle.",
+          alt: "MCP TrustMap — Vos serveurs MCP, sous contrôle.",
         },
       ],
     },

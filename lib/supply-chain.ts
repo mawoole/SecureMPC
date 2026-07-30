@@ -462,7 +462,7 @@ export function createCycloneDxReport(
   const serverRefs = servers.map(
     (server) => `urn:mcp-server:${encodeURIComponent(server.id)}`,
   );
-  const rootRef = "urn:mcp-inventory:secure-mpc";
+  const rootRef = "urn:mcp-inventory:mcp-trustmap";
 
   return {
     $schema: "https://cyclonedx.org/schema/bom-1.7.schema.json",
@@ -476,7 +476,7 @@ export function createCycloneDxReport(
         components: [
           {
             type: "application",
-            name: "Secure MPC",
+            name: "MCP TrustMap",
             version: "1.5.0",
           },
         ],
@@ -494,20 +494,20 @@ export function createCycloneDxReport(
         "bom-ref": serverRefs[index],
         name: server.name,
         properties: [
-          { name: "secure-mpc:transport", value: server.transport },
-          { name: "secure-mpc:source", value: server.source },
+          { name: "mcp-trustmap:transport", value: server.transport },
+          { name: "mcp-trustmap:source", value: server.source },
           ...(server.score === undefined
             ? []
             : [
                 {
-                  name: "secure-mpc:security-score",
+                  name: "mcp-trustmap:security-score",
                   value: String(server.score),
                 },
               ]),
           ...(server.findings
             ? [
                 {
-                  name: "secure-mpc:findings",
+                  name: "mcp-trustmap:findings",
                   value: String(server.findings.length),
                 },
               ]
@@ -522,25 +522,25 @@ export function createCycloneDxReport(
         ...(component.purl ? { purl: component.purl } : {}),
         properties: [
           {
-            name: "secure-mpc:ecosystem",
+            name: "mcp-trustmap:ecosystem",
             value: component.ecosystem,
           },
           {
-            name: "secure-mpc:pin-status",
+            name: "mcp-trustmap:pin-status",
             value: component.pinStatus,
           },
           {
-            name: "secure-mpc:evidence",
+            name: "mcp-trustmap:evidence",
             value: component.evidence,
           },
           {
-            name: "secure-mpc:scope",
+            name: "mcp-trustmap:scope",
             value: component.scope ?? "direct",
           },
           ...(component.lockfile
             ? [
                 {
-                  name: "secure-mpc:lockfile",
+                  name: "mcp-trustmap:lockfile",
                   value: component.lockfile,
                 },
               ]
@@ -548,7 +548,7 @@ export function createCycloneDxReport(
           ...(component.integrityStatus
             ? [
                 {
-                  name: "secure-mpc:integrity",
+                  name: "mcp-trustmap:integrity",
                   value: component.integrityStatus,
                 },
               ]
@@ -556,7 +556,7 @@ export function createCycloneDxReport(
           ...(component.workspace
             ? [
                 {
-                  name: "secure-mpc:workspace",
+                  name: "mcp-trustmap:workspace",
                   value: component.workspace,
                 },
               ]
@@ -564,29 +564,29 @@ export function createCycloneDxReport(
           ...(component.provenance
             ? [
                 {
-                  name: "secure-mpc:provenance-provider",
+                  name: "mcp-trustmap:provenance-provider",
                   value: component.provenance.provider,
                 },
                 {
-                  name: "secure-mpc:registry-signature",
+                  name: "mcp-trustmap:registry-signature",
                   value: component.provenance.registrySignature,
                 },
                 {
-                  name: "secure-mpc:slsa-provenance",
+                  name: "mcp-trustmap:slsa-provenance",
                   value: component.provenance.slsaProvenance,
                 },
                 {
-                  name: "secure-mpc:provenance-subject-digest",
+                  name: "mcp-trustmap:provenance-subject-digest",
                   value: component.provenance.subjectDigest,
                 },
                 {
-                  name: "secure-mpc:provenance-identity-policy",
+                  name: "mcp-trustmap:provenance-identity-policy",
                   value: component.provenance.identityPolicy,
                 },
                 ...(component.provenance.policyId
                   ? [
                       {
-                        name: "secure-mpc:provenance-policy",
+                        name: "mcp-trustmap:provenance-policy",
                         value: component.provenance.policyId,
                       },
                     ]
@@ -594,7 +594,7 @@ export function createCycloneDxReport(
                 ...(component.provenance.sourceRepository
                   ? [
                       {
-                        name: "secure-mpc:source-repository",
+                        name: "mcp-trustmap:source-repository",
                         value: component.provenance.sourceRepository,
                       },
                     ]
@@ -602,7 +602,7 @@ export function createCycloneDxReport(
                 ...(component.provenance.builderId
                   ? [
                       {
-                        name: "secure-mpc:builder-id",
+                        name: "mcp-trustmap:builder-id",
                         value: component.provenance.builderId,
                       },
                     ]

@@ -42,8 +42,12 @@ import {
   type AuditHistorySource,
 } from "../lib/audit-history";
 import { AuditHistoryView } from "./audit-history-view";
+import { TrustMapDiscover } from "./trustmap-discover";
+import { TrustMapCi } from "./trustmap-ci";
+import { TrustMapEnterprise } from "./trustmap-enterprise";
 
-type View = "overview" | "servers" | "rules" | "history";
+type View = "discover" | "audit" | "ci" | "enterprise";
+type AuditView = "overview" | "servers" | "rules" | "history";
 
 type ExceptionDraft = {
   findingKey: string;
@@ -54,9 +58,11 @@ type ExceptionDraft = {
   maximumExpiresOn: string;
 };
 
-const RISK_EXCEPTIONS_STORAGE_KEY = "secure-mpc.risk-exceptions.v1";
-const LEGACY_RISK_EXCEPTIONS_STORAGE_KEY =
-  "mcp-sentinel.risk-exceptions.v1";
+const RISK_EXCEPTIONS_STORAGE_KEY = "mcp-trustmap.risk-exceptions.v1";
+const LEGACY_RISK_EXCEPTIONS_STORAGE_KEYS = [
+  ["secure", "mpc.risk-exceptions.v1"].join("-"),
+  "mcp-sentinel.risk-exceptions.v1",
+] as const;
 
 function dateInputValue(date: Date): string {
   const offset = date.getTimezoneOffset() * 60_000;
@@ -380,7 +386,7 @@ const sampleConfig = `{
 function BrandMark() {
   return (
     <span className="brand-mark" aria-hidden="true">
-      M
+      T
     </span>
   );
 }
@@ -391,7 +397,8 @@ function StatusDot({ status }: { status: ServerStatus }) {
 
 export default function Home() {
   const [servers, setServers] = useState<McpServer[]>(demoServers);
-  const [view, setView] = useState<View>("overview");
+  const [view, setView] = useState<View>("audit");
+  const [auditView, setAuditView] = useState<AuditView>("overview");
   const [filter, setFilter] = useState<"all" | ServerStatus>("all");
   const [search, setSearch] = useState("");
   const [selectedServer, setSelectedServer] = useState<McpServer | null>(null);
@@ -417,9 +424,12 @@ export default function Home() {
       const savedExceptions = window.localStorage.getItem(
         RISK_EXCEPTIONS_STORAGE_KEY,
       );
-      const legacyExceptions = window.localStorage.getItem(
-        LEGACY_RISK_EXCEPTIONS_STORAGE_KEY,
+      const legacyKey = LEGACY_RISK_EXCEPTIONS_STORAGE_KEYS.find((key) =>
+        window.localStorage.getItem(key),
       );
+      const legacyExceptions = legacyKey
+        ? window.localStorage.getItem(legacyKey)
+        : null;
       setRiskExceptions(
         parseRiskExceptions(savedExceptions ?? legacyExceptions),
       );
@@ -429,8 +439,8 @@ export default function Home() {
             RISK_EXCEPTIONS_STORAGE_KEY,
             legacyExceptions,
           );
-          window.localStorage.removeItem(
-            LEGACY_RISK_EXCEPTIONS_STORAGE_KEY,
+          LEGACY_RISK_EXCEPTIONS_STORAGE_KEYS.forEach((key) =>
+            window.localStorage.removeItem(key),
           );
         } catch {
           // The persistence effect below will retry without blocking startup.
@@ -848,8 +858,8 @@ export default function Home() {
         const date = generatedAt.toISOString().slice(0, 10);
         fileName =
           format === "cyclonedx"
-            ? `secure-mpc-${date}.cdx.json`
-            : `secure-mpc-${date}.${format}`;
+            ? `mcp-trustmap-${date}.cdx.json`
+            : `mcp-trustmap-${date}.${format}`;
         successMessage =
           format === "sarif"
             ? "Rapport SARIF exporté"
@@ -877,11 +887,23 @@ export default function Home() {
   };
 
   const navItems: { id: View; label: string; icon: string }[] = [
-    { id: "overview", label: "Vue d’ensemble", icon: "⌂" },
-    { id: "servers", label: "Serveurs", icon: "▦" },
-    { id: "rules", label: "Règles de sécurité", icon: "✓" },
-    { id: "history", label: "Historique", icon: "↗" },
+    { id: "discover", label: "TrustMap Discover", icon: "◎" },
+    { id: "audit", label: "TrustMap Audit", icon: "✓" },
+    { id: "ci", label: "TrustMap CI", icon: "⌘" },
+    { id: "enterprise", label: "TrustMap Enterprise", icon: "◇" },
   ];
+
+  const auditNavItems: { id: AuditView; label: string }[] = [
+    { id: "overview", label: "Vue d’ensemble" },
+    { id: "servers", label: "Serveurs" },
+    { id: "rules", label: "Référentiel" },
+    { id: "history", label: "Historique & exceptions" },
+  ];
+
+  const notify = (message: string) => {
+    setToast(message);
+    window.setTimeout(() => setToast(""), 2600);
+  };
 
   return (
     <div className="app-shell">
@@ -889,13 +911,13 @@ export default function Home() {
         <div className="brand">
           <BrandMark />
           <div>
-            <strong>Secure MPC</strong>
-            <span>Security workspace</span>
+            <strong>MCP TrustMap</strong>
+            <span>Trust & security workspace</span>
           </div>
         </div>
 
         <nav className="nav" aria-label="Navigation principale">
-          <span className="nav-label">SURVEILLANCE</span>
+          <span className="nav-label">MODULES</span>
           {navItems.map((item) => (
             <button
               className={view === item.id ? "active" : ""}
@@ -904,7 +926,7 @@ export default function Home() {
             >
               <span aria-hidden="true">{item.icon}</span>
               {item.label}
-              {item.id === "servers" && (
+              {item.id === "discover" && (
                 <small>{servers.length}</small>
               )}
             </button>
@@ -940,10 +962,10 @@ export default function Home() {
           <div>
             <p className="eyebrow">ESPACE DE TRAVAIL / PRODUCTION</p>
             <h1>
-              {view === "overview" && "Vue d’ensemble"}
-              {view === "servers" && "Serveurs MCP"}
-              {view === "rules" && "Règles de sécurité"}
-              {view === "history" && "Historique des audits"}
+              {view === "discover" && "TrustMap Discover"}
+              {view === "audit" && "TrustMap Audit"}
+              {view === "ci" && "TrustMap CI"}
+              {view === "enterprise" && "TrustMap Enterprise"}
             </h1>
           </div>
           <div className="topbar-actions">
@@ -951,7 +973,7 @@ export default function Home() {
               <i aria-hidden="true" />
               Dernier audit : {lastAudit}
             </span>
-            <details className="export-menu">
+            {view === "audit" && <details className="export-menu">
               <summary className="button secondary">
                 <span aria-hidden="true">↓</span>
                 Exporter
@@ -986,28 +1008,8 @@ export default function Home() {
                   </span>
                 </button>
               </div>
-            </details>
-            <button
-              className="button secondary"
-              onClick={() => {
-                setImportError("");
-                setDiscoveryOpen(true);
-              }}
-            >
-              <span aria-hidden="true">◎</span>
-              Découvrir
-            </button>
-            <button
-              className="button secondary"
-              onClick={() => {
-                setImportError("");
-                setImportOpen(true);
-              }}
-            >
-              <span aria-hidden="true">＋</span>
-              Importer
-            </button>
-            <button
+            </details>}
+            {view === "audit" && <button
               className="button primary"
               onClick={runAudit}
               disabled={scanning}
@@ -1016,11 +1018,40 @@ export default function Home() {
                 ↻
               </span>
               {scanning ? "Analyse…" : "Lancer un audit"}
-            </button>
+            </button>}
           </div>
         </header>
 
-        {view === "overview" && (
+        {view === "discover" && (
+          <TrustMapDiscover
+            servers={servers}
+            onDiscover={() => {
+              setImportError("");
+              setDiscoveryOpen(true);
+            }}
+            onImport={() => {
+              setImportError("");
+              setImportOpen(true);
+            }}
+            onSelect={setSelectedServer}
+          />
+        )}
+
+        {view === "audit" && (
+          <nav className="audit-subnav" aria-label="Sections de TrustMap Audit">
+            {auditNavItems.map((item) => (
+              <button
+                key={item.id}
+                className={auditView === item.id ? "active" : ""}
+                onClick={() => setAuditView(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+        )}
+
+        {view === "audit" && auditView === "overview" && (
           <>
             <section className="hero-grid" aria-label="Indicateurs de sécurité">
               <article className="score-card">
@@ -1101,7 +1132,7 @@ export default function Home() {
                 search={search}
                 setSearch={setSearch}
                 onSelect={setSelectedServer}
-                onSeeAll={() => setView("servers")}
+                onSeeAll={() => setAuditView("servers")}
               />
               <RemediationPanel
                 items={priorityFindings.slice(0, 4)}
@@ -1121,7 +1152,7 @@ export default function Home() {
                 <strong>Analyse locale et respectueuse de vos secrets</strong>
                 <p>
                   Les configurations importées sont analysées dans votre
-                  navigateur. Secure MPC n’affiche jamais les valeurs
+                  navigateur. MCP TrustMap n’affiche jamais les valeurs
                   sensibles détectées.
                 </p>
               </div>
@@ -1130,7 +1161,7 @@ export default function Home() {
           </>
         )}
 
-        {view === "servers" && (
+        {view === "audit" && auditView === "servers" && (
           <section className="single-view">
             <div className="view-intro">
               <div>
@@ -1166,7 +1197,7 @@ export default function Home() {
           </section>
         )}
 
-        {view === "rules" && (
+        {view === "audit" && auditView === "rules" && (
           <section className="single-view">
             <div className="view-intro">
               <div>
@@ -1198,7 +1229,7 @@ export default function Home() {
           </section>
         )}
 
-        {view === "history" && (
+        {view === "audit" && auditView === "history" && (
           <section className="single-view">
             <div className="view-intro">
               <div>
@@ -1273,6 +1304,22 @@ export default function Home() {
               )}
             </article>
           </section>
+        )}
+
+        {view === "ci" && (
+          <TrustMapCi
+            servers={servers}
+            exceptions={riskExceptions}
+            onNotify={notify}
+          />
+        )}
+
+        {view === "enterprise" && (
+          <TrustMapEnterprise
+            servers={servers}
+            exceptions={riskExceptions}
+            onNotify={notify}
+          />
         )}
       </main>
 

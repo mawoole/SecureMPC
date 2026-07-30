@@ -93,7 +93,7 @@ export function formatSecurityGateSummary(
   maximumDetails = 20,
 ): string {
   const lines = [
-    `[Secure MPC] Contrôle CI : ${result.passed ? "RÉUSSI" : "ÉCHEC"}.`,
+    `[MCP TrustMap] Contrôle CI : ${result.passed ? "RÉUSSI" : "ÉCHEC"}.`,
     `${result.servers} serveur${result.servers === 1 ? "" : "s"} audité${result.servers === 1 ? "" : "s"} ; ${result.findings.critical} critique${result.findings.critical === 1 ? "" : "s"}, ${result.findings.high} élevé${result.findings.high === 1 ? "" : "s"}, ${result.findings.medium} moyen${result.findings.medium === 1 ? "" : "s"}.`,
   ];
 

@@ -247,7 +247,7 @@ test("imports a redacted collector inventory with passive probe evidence", () =>
       schemaVersion: "1.0",
       generatedAt: "2026-07-29T12:00:00.000Z",
       collector: {
-        name: "Secure MPC Collector",
+        name: "MCP TrustMap Collector",
         version: "1.0.0",
         platform: "linux",
       },
@@ -302,7 +302,7 @@ test("turns OSV advisories into scored findings and SARIF rules", () => {
       schemaVersion: "1.0",
       generatedAt: "2026-07-29T12:00:00.000Z",
       collector: {
-        name: "Secure MPC Collector",
+        name: "MCP TrustMap Collector",
         version: "1.2.0",
         platform: "linux",
       },
@@ -421,7 +421,7 @@ test("turns invalid SLSA or registry proofs into a critical finding", () => {
       schemaVersion: "1.0",
       generatedAt: "2026-07-30T12:00:00.000Z",
       collector: {
-        name: "Secure MPC Collector",
+        name: "MCP TrustMap Collector",
         version: "1.5.0",
         platform: "linux",
       },
@@ -505,7 +505,7 @@ test("imports a verified GitHub OCI attestation without inventing a supply-chain
       schemaVersion: "1.0",
       generatedAt: "2026-07-30T12:00:00.000Z",
       collector: {
-        name: "Secure MPC Collector",
+        name: "MCP TrustMap Collector",
         version: "1.4.0",
         platform: "linux",
       },
@@ -594,7 +594,7 @@ test("turns an unmatched OCI policy into a critical actionable finding", () => {
       schemaVersion: "1.0",
       generatedAt: "2026-07-30T12:00:00.000Z",
       collector: {
-        name: "Secure MPC Collector",
+        name: "MCP TrustMap Collector",
         version: "1.5.0",
         platform: "linux",
       },
