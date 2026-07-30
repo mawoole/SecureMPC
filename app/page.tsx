@@ -54,7 +54,9 @@ type ExceptionDraft = {
   maximumExpiresOn: string;
 };
 
-const RISK_EXCEPTIONS_STORAGE_KEY = "mcp-sentinel.risk-exceptions.v1";
+const RISK_EXCEPTIONS_STORAGE_KEY = "secure-mpc.risk-exceptions.v1";
+const LEGACY_RISK_EXCEPTIONS_STORAGE_KEY =
+  "mcp-sentinel.risk-exceptions.v1";
 
 function dateInputValue(date: Date): string {
   const offset = date.getTimezoneOffset() * 60_000;
@@ -412,11 +414,28 @@ export default function Home() {
 
   useEffect(() => {
     const loadTimer = window.setTimeout(() => {
-      setRiskExceptions(
-        parseRiskExceptions(
-          window.localStorage.getItem(RISK_EXCEPTIONS_STORAGE_KEY),
-        ),
+      const savedExceptions = window.localStorage.getItem(
+        RISK_EXCEPTIONS_STORAGE_KEY,
       );
+      const legacyExceptions = window.localStorage.getItem(
+        LEGACY_RISK_EXCEPTIONS_STORAGE_KEY,
+      );
+      setRiskExceptions(
+        parseRiskExceptions(savedExceptions ?? legacyExceptions),
+      );
+      if (!savedExceptions && legacyExceptions) {
+        try {
+          window.localStorage.setItem(
+            RISK_EXCEPTIONS_STORAGE_KEY,
+            legacyExceptions,
+          );
+          window.localStorage.removeItem(
+            LEGACY_RISK_EXCEPTIONS_STORAGE_KEY,
+          );
+        } catch {
+          // The persistence effect below will retry without blocking startup.
+        }
+      }
       setExceptionsLoaded(true);
     }, 0);
     return () => window.clearTimeout(loadTimer);
@@ -829,8 +848,8 @@ export default function Home() {
         const date = generatedAt.toISOString().slice(0, 10);
         fileName =
           format === "cyclonedx"
-            ? `mcp-sentinel-${date}.cdx.json`
-            : `mcp-sentinel-${date}.${format}`;
+            ? `secure-mpc-${date}.cdx.json`
+            : `secure-mpc-${date}.${format}`;
         successMessage =
           format === "sarif"
             ? "Rapport SARIF exporté"
@@ -870,7 +889,7 @@ export default function Home() {
         <div className="brand">
           <BrandMark />
           <div>
-            <strong>MCP Sentinel</strong>
+            <strong>Secure MPC</strong>
             <span>Security workspace</span>
           </div>
         </div>
@@ -1102,7 +1121,7 @@ export default function Home() {
                 <strong>Analyse locale et respectueuse de vos secrets</strong>
                 <p>
                   Les configurations importées sont analysées dans votre
-                  navigateur. MCP Sentinel n’affiche jamais les valeurs
+                  navigateur. Secure MPC n’affiche jamais les valeurs
                   sensibles détectées.
                 </p>
               </div>

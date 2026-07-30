@@ -68,20 +68,20 @@ jobs:
           npm run audit:ci -- \
             --path ./examples/ci-safe-mcp.json \
             --output ./.ci-mcp-inventory.json \
-            --sarif ./.ci-mcp-sentinel.sarif
+            --sarif ./.ci-secure-mpc.sarif
 
       - name: Generate Kubernetes admission bundle
         run: |
           npm run generate:admission -- \
             --policy-file ./examples/oci-policies.json \
-            --namespace mcp-sentinel-ci \
+            --namespace secure-mpc-ci \
             --output ./.ci-kubernetes-admission
 
       - name: Validate Kubernetes admission bundle
         run: |
           npm run validate:admission -- \
             --policy-file ./examples/oci-policies.json \
-            --namespace mcp-sentinel-ci \
+            --namespace secure-mpc-ci \
             --bundle ./.ci-kubernetes-admission
 
       - name: Lint

@@ -20,7 +20,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol =
     forwardedProtocol ?? (host.startsWith("localhost") ? "http" : "https");
   const baseUrl = new URL(`${protocol}://${host}`);
-  const title = "MCP Sentinel — Audit de sécurité MCP";
+  const title = "Secure MPC — Audit de sécurité MCP";
   const description =
     "Analysez la configuration de vos serveurs MCP, priorisez les risques et appliquez des correctifs concrets.";
 
@@ -35,9 +35,9 @@ export async function generateMetadata(): Promise<Metadata> {
       images: [
         {
           url: new URL("/og.png", baseUrl).toString(),
-          width: 1792,
-          height: 933,
-          alt: "MCP Sentinel — Vos serveurs MCP, sous contrôle.",
+          width: 1732,
+          height: 908,
+          alt: "Secure MPC — Vos serveurs MCP, sous contrôle.",
         },
       ],
     },

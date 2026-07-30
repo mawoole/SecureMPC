@@ -39,6 +39,7 @@ async function actorHash(request: Request): Promise<string | null> {
 
   const digest = await crypto.subtle.digest(
     "SHA-256",
+    // Keep the original namespace so existing per-user history remains readable.
     new TextEncoder().encode(`mcp-sentinel:audit-history:${identity}`),
   );
   return [...new Uint8Array(digest)]

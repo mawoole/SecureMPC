@@ -12,7 +12,7 @@ type CliOptions = {
 };
 
 function help(): string {
-  return `MCP Sentinel — Validation de bundle d’admission Kubernetes
+  return `Secure MPC — Validation de bundle d’admission Kubernetes
 
 Usage:
   npm run validate:admission -- \\

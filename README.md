@@ -1,10 +1,10 @@
-# MCP Sentinel
+# Secure MPC
 
 [![CI](https://github.com/mawoole/SecureMPC/actions/workflows/ci.yml/badge.svg)](https://github.com/mawoole/SecureMPC/actions/workflows/ci.yml)
 
-![Aperçu MCP Sentinel](public/og.png)
+![Aperçu Secure MPC](public/og.png)
 
-MCP Sentinel est une application web d’audit de configurations MCP
+Secure MPC est une application web d’audit de configurations MCP
 ([Model Context Protocol](https://modelcontextprotocol.io/)). Elle transforme un
 inventaire de serveurs difficile à relire en une posture de sécurité claire :
 score global, risques prioritaires, explication de l’impact et correctifs
@@ -131,7 +131,7 @@ npm run build
 ## Exceptions de risque
 
 Une correction qui ne peut pas être appliquée immédiatement peut être placée
-sous exception depuis le détail de l’écart. MCP Sentinel exige :
+sous exception depuis le détail de l’écart. Secure MPC exige :
 
 - un motif explicite et, idéalement, une référence de suivi ;
 - un responsable identifié ;
@@ -248,7 +248,7 @@ npm run collect -- --sbom
 
 ### Inventaire supply chain et SBOM
 
-MCP Sentinel reconnaît les lanceurs suivants sans les exécuter :
+Secure MPC reconnaît les lanceurs suivants sans les exécuter :
 
 - npm : `npx`, `npm exec`, `pnpm dlx`, `yarn dlx` et `bunx` ;
 - Python : `uvx` et `pipx run` ;
@@ -317,7 +317,7 @@ et rattachés aux serveurs, directs comme transitifs :
 npm run collect -- --provenance
 ```
 
-Pour chaque composant, MCP Sentinel :
+Pour chaque composant, Secure MPC :
 
 1. exige que l’intégrité SRI du lockfile corresponde à `dist.integrity` ;
 2. vérifie la signature ECDSA du registre sur
@@ -415,7 +415,7 @@ la voie GitHub continue d’utiliser `gh`.
 
 Les références d’images peuvent être transmises au registre et au service de
 confiance choisi. Pour un registre privé, `cosign` ou `gh` peut réutiliser ses
-propres identifiants déjà configurés ; MCP Sentinel ne lit ni ne conserve ces
+propres identifiants déjà configurés ; Secure MPC ne lit ni ne conserve ces
 identifiants.
 
 ### Admission Kubernetes
@@ -643,7 +643,7 @@ ou élevé est détecté :
 ```bash
 npm run audit:ci -- \
   --path ./.mcp.json \
-  --sarif ./mcp-sentinel.sarif
+  --sarif ./secure-mpc.sarif
 ```
 
 Le seuil peut être adapté avec `--fail-on critical|high|medium`. Utilisez
@@ -669,10 +669,10 @@ steps:
   - name: Audit MCP
     run: npm run audit:ci -- --path ./.mcp.json --sarif
   - name: Publier le rapport SARIF
-    if: always() && hashFiles('mcp-sentinel.sarif') != ''
+    if: always() && hashFiles('secure-mpc.sarif') != ''
     uses: github/codeql-action/upload-sarif@v4
     with:
-      sarif_file: mcp-sentinel.sarif
+      sarif_file: secure-mpc.sarif
 ```
 
 Les codes de sortie sont stables : `0` pour un contrôle réussi, `1` pour une
