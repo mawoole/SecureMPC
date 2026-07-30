@@ -35,12 +35,14 @@ export type ComponentProvenance = {
   provider:
     | "npm-registry-sigstore"
     | "oci-cosign"
-    | "oci-github-attestation";
+    | "oci-github-attestation"
+    | "oci-policy";
   checkedAt: string;
   registrySignature: VerificationState;
   slsaProvenance: VerificationState;
   subjectDigest: "matched" | "mismatched" | "unavailable";
   identityPolicy: "matched" | "mismatched" | "not-configured";
+  policyId?: string;
   sourceRepository?: string;
   builderId?: string;
   message: string;
@@ -475,7 +477,7 @@ export function createCycloneDxReport(
           {
             type: "application",
             name: "MCP Sentinel",
-            version: "1.4.0",
+            version: "1.5.0",
           },
         ],
       },
@@ -581,6 +583,14 @@ export function createCycloneDxReport(
                   name: "mcp-sentinel:provenance-identity-policy",
                   value: component.provenance.identityPolicy,
                 },
+                ...(component.provenance.policyId
+                  ? [
+                      {
+                        name: "mcp-sentinel:provenance-policy",
+                        value: component.provenance.policyId,
+                      },
+                    ]
+                  : []),
                 ...(component.provenance.sourceRepository
                   ? [
                       {

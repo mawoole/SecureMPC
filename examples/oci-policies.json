@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "policies": [
+    {
+      "id": "github-acme",
+      "imagePrefix": "ghcr.io/acme",
+      "kind": "github",
+      "repository": "acme/mcp-images"
+    },
+    {
+      "id": "cosign-private",
+      "imagePrefix": "registry.example.com/mcp",
+      "kind": "cosign",
+      "certificateIssuer": "https://token.actions.githubusercontent.com",
+      "certificateIdentityURI": "^https://github\\.com/acme/mcp-images/.github/workflows/release\\.yml@refs/tags/.+$",
+      "predicateType": "slsaprovenance1"
+    }
+  ]
+}

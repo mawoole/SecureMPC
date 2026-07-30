@@ -103,6 +103,16 @@ test("generates a deduplicated CycloneDX 1.7 dependency graph", () => {
       fixedVersion: "1.2.4",
     },
   ];
+  components[0].provenance = {
+    provider: "npm-registry-sigstore",
+    checkedAt: "2026-07-29T12:00:00.000Z",
+    registrySignature: "verified",
+    slsaProvenance: "verified",
+    subjectDigest: "matched",
+    identityPolicy: "matched",
+    policyId: "release-policy",
+    message: "Preuve vérifiée.",
+  };
   const report = createCycloneDxReport(
     [
       {
@@ -149,6 +159,10 @@ test("generates a deduplicated CycloneDX 1.7 dependency graph", () => {
   assert.equal(report.vulnerabilities?.length, 1);
   assert.equal(report.vulnerabilities?.[0].id, "GHSA-test-1234");
   assert.equal(report.vulnerabilities?.[0].affects.length, 1);
+  assert.match(
+    JSON.stringify(report),
+    /mcp-sentinel:provenance-policy/,
+  );
   assert.match(
     report.vulnerabilities?.[0].recommendation ?? "",
     /1\.2\.4/,

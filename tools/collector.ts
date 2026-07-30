@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 
-import { chmod, writeFile } from "node:fs/promises";
+import { chmod, readFile, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { collectInventory } from "../lib/collector.ts";
-import type { OciVerificationPolicy } from "../lib/oci-provenance.ts";
+import {
+  parseOciVerificationPolicyDocument,
+  type OciVerificationPolicy,
+  type OciVerificationRule,
+} from "../lib/oci-provenance.ts";
 import { scanComponentsWithOsv } from "../lib/osv.ts";
 import type { ProvenancePolicy } from "../lib/provenance.ts";
 import { createCycloneDxReport } from "../lib/supply-chain.ts";
@@ -15,8 +19,10 @@ type CliOptions = {
   ociBackend?: "cosign" | "github";
   ociIdentity?: string;
   ociIssuer?: string;
+  ociPolicyFile?: string;
   ociRepository?: string;
   ociVerificationPolicy?: OciVerificationPolicy;
+  ociVerificationPolicies?: OciVerificationRule[];
   ociVerifierExecutable?: string;
   osv: boolean;
   probe: boolean;
@@ -63,6 +69,8 @@ Options:
                          Chemin facultatif vers cosign ou cosign.exe
   --oci-github-repo <owner/repo>
                          Vérifie l’attestation OCI liée à ce dépôt GitHub
+  --oci-policy-file <fichier>
+                         Applique plusieurs politiques OCI par préfixe d’image
   --sbom [fichier]       Produit aussi un SBOM CycloneDX 1.7
   --timeout <ms>         Délai du probe, entre 500 et 15000 ms (défaut : 5000)
   --output <fichier>     Fichier produit (défaut : mcp-inventory.json)
@@ -159,7 +167,6 @@ function parseArguments(args: string[]): CliOptions {
       options.ociVerifierExecutable = resolve(
         readValue(args, index, argument),
       );
-      options.ociBackend = "cosign";
       options.verifyOciProvenance = true;
       index += 1;
       continue;
@@ -167,6 +174,12 @@ function parseArguments(args: string[]): CliOptions {
     if (argument === "--oci-github-repo") {
       options.ociRepository = readValue(args, index, argument);
       options.ociBackend = "github";
+      options.verifyOciProvenance = true;
+      index += 1;
+      continue;
+    }
+    if (argument === "--oci-policy-file") {
+      options.ociPolicyFile = resolve(readValue(args, index, argument));
       options.verifyOciProvenance = true;
       index += 1;
       continue;
@@ -254,6 +267,17 @@ function parseArguments(args: string[]): CliOptions {
       "--oci-github-repo ne peut pas être combiné avec les options Cosign.",
     );
   }
+  if (
+    options.ociPolicyFile &&
+    (options.ociBackend ||
+      options.ociIssuer ||
+      options.ociIdentity ||
+      options.ociRepository)
+  ) {
+    throw new Error(
+      "--oci-policy-file ne peut pas être combiné avec une politique OCI globale.",
+    );
+  }
   if (options.ociBackend === "cosign") {
     if (!options.ociIssuer || !options.ociIdentity) {
       throw new Error(
@@ -294,8 +318,32 @@ function parseArguments(args: string[]): CliOptions {
   return options;
 }
 
+async function loadOciPolicyFile(
+  filePath: string,
+): Promise<OciVerificationRule[]> {
+  const information = await stat(filePath);
+  if (!information.isFile() || information.size > 256_000) {
+    throw new Error(
+      "Le fichier de politiques OCI doit être un fichier JSON de 256 Ko maximum.",
+    );
+  }
+  const raw = await readFile(filePath, "utf8");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error("Le fichier de politiques OCI n’est pas un JSON valide.");
+  }
+  return parseOciVerificationPolicyDocument(parsed).policies;
+}
+
 async function main() {
   const options = parseArguments(process.argv.slice(2));
+  if (options.ociPolicyFile) {
+    options.ociVerificationPolicies = await loadOciPolicyFile(
+      options.ociPolicyFile,
+    );
+  }
   const inventory = await collectInventory(options);
 
   if (options.osv) {
@@ -397,7 +445,7 @@ async function main() {
         ? `${provenance?.registrySignaturesVerified ?? 0} signature${provenance?.registrySignaturesVerified === 1 ? "" : "s"} npm et ${provenance?.slsaProvenanceVerified ?? 0} provenance${provenance?.slsaProvenanceVerified === 1 ? "" : "s"} SLSA vérifiée${provenance?.slsaProvenanceVerified === 1 ? "" : "s"}.`
         : "Vérification de provenance non demandée.",
       options.verifyOciProvenance
-        ? `${oci?.signaturesVerified ?? 0} signature${oci?.signaturesVerified === 1 ? "" : "s"} OCI et ${oci?.slsaProvenanceVerified ?? 0} provenance${oci?.slsaProvenanceVerified === 1 ? "" : "s"} OCI vérifiée${oci?.slsaProvenanceVerified === 1 ? "" : "s"}.`
+        ? `${oci?.matched ?? 0}/${oci?.images ?? 0} image${oci?.images === 1 ? "" : "s"} rattachée${oci?.images === 1 ? "" : "s"} à ${oci?.policies ?? 0} politique${oci?.policies === 1 ? "" : "s"} OCI ; ${oci?.unmatched ?? 0} sans correspondance.`
         : "Vérification OCI non demandée.",
       options.stdout ? "" : `Inventaire : ${options.output}`,
       options.sbomOutput ? `SBOM : ${options.sbomOutput}` : "",

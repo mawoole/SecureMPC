@@ -78,6 +78,11 @@ test("keeps the audit engine separate from the interface", async () => {
   assert.match(lockfiles, /export async function analyzeLockfile/);
   assert.match(lockfiles, /export function enrichComponentsFromLockfiles/);
   assert.match(ociProvenance, /export async function verifyOciProvenance/);
+  assert.match(
+    ociProvenance,
+    /export function parseOciVerificationPolicyDocument/,
+  );
+  assert.match(page, /POLITIQUE ABSENTE/);
   assert.match(osv, /export async function scanComponentsWithOsv/);
   assert.match(provenance, /export async function verifyComponentProvenance/);
   assert.match(workspaces, /export async function discoverWorkspacePackages/);
