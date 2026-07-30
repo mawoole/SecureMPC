@@ -15,6 +15,18 @@ export type TrustMapCiOptions = {
   requireServers: boolean;
 };
 
+export type TrustMapCiEnvironment =
+  | "development"
+  | "staging"
+  | "production";
+
+export type TrustMapCiPolicyProfile = TrustMapCiOptions & {
+  id: string;
+  name: string;
+  environment: TrustMapCiEnvironment;
+  enabled: boolean;
+};
+
 export type DistributionItem = {
   label: string;
   count: number;
@@ -61,6 +73,48 @@ const severityRank: Record<Severity, number> = {
   medium: 1,
 };
 
+export const DEFAULT_TRUSTMAP_CI_PROFILES: TrustMapCiPolicyProfile[] = [
+  {
+    id: "development",
+    name: "Développement",
+    environment: "development",
+    enabled: true,
+    configPath: "./.mcp/development.json",
+    failOn: "critical",
+    sarif: false,
+    sbom: false,
+    osv: false,
+    provenance: false,
+    requireServers: true,
+  },
+  {
+    id: "staging",
+    name: "Préproduction",
+    environment: "staging",
+    enabled: true,
+    configPath: "./.mcp/staging.json",
+    failOn: "high",
+    sarif: true,
+    sbom: true,
+    osv: true,
+    provenance: true,
+    requireServers: true,
+  },
+  {
+    id: "production",
+    name: "Production",
+    environment: "production",
+    enabled: true,
+    configPath: "./.mcp/production.json",
+    failOn: "medium",
+    sarif: true,
+    sbom: true,
+    osv: true,
+    provenance: true,
+    requireServers: true,
+  },
+];
+
 function distribution(values: string[]): DistributionItem[] {
   const counts = new Map<string, number>();
   for (const value of values) {
@@ -95,11 +149,31 @@ export function createDiscoverSummary(servers: McpServer[]): DiscoverSummary {
 
 function shellArgument(value: string): string {
   const trimmed = value.trim();
+  if (
+    !trimmed ||
+    trimmed.length > 500 ||
+    /[\u0000-\u001f\u007f$`;&|<>]/.test(trimmed)
+  ) {
+    throw new Error("Le chemin de configuration contient des caractères non autorisés.");
+  }
   if (/^[A-Za-z0-9_./@:-]+$/.test(trimmed)) return trimmed;
-  return `"${trimmed.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+  return `'${trimmed.replaceAll("'", "'\"'\"'")}'`;
 }
 
-export function createCiCommand(options: TrustMapCiOptions): string {
+function artifactSuffix(value?: string): string {
+  const normalized = value
+    ?.trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized ? `-${normalized.slice(0, 48)}` : "";
+}
+
+function createCiCommandForProfile(
+  options: TrustMapCiOptions,
+  profileId?: string,
+): string {
+  const suffix = artifactSuffix(profileId);
   const args = [
     "npm run collect --",
     "--no-default-paths",
@@ -109,9 +183,13 @@ export function createCiCommand(options: TrustMapCiOptions): string {
   if (options.requireServers) args.push("--require-servers");
   if (options.osv) args.push("--osv");
   if (options.provenance) args.push("--provenance");
-  if (options.sbom) args.push("--sbom ./mcp-trustmap.cdx.json");
-  if (options.sarif) args.push("--sarif ./mcp-trustmap.sarif");
+  if (options.sbom) args.push(`--sbom ./mcp-trustmap${suffix}.cdx.json`);
+  if (options.sarif) args.push(`--sarif ./mcp-trustmap${suffix}.sarif`);
   return args.join(" ");
+}
+
+export function createCiCommand(options: TrustMapCiOptions): string {
+  return createCiCommandForProfile(options);
 }
 
 export function createGithubActionsWorkflow(options: TrustMapCiOptions): string {
@@ -150,6 +228,91 @@ jobs:
       - run: npm ci
       - name: Appliquer la politique MCP TrustMap
         run: ${auditCommand}${sarifSteps}
+`;
+}
+
+function jobId(profile: TrustMapCiPolicyProfile): string {
+  const normalized = profile.id
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!normalized) {
+    throw new Error("Chaque politique CI doit avoir un identifiant exploitable.");
+  }
+  return `trustmap_${normalized.slice(0, 48)}`;
+}
+
+function yamlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+export function createMultiEnvironmentWorkflow(
+  profiles: TrustMapCiPolicyProfile[],
+): string {
+  const activeProfiles = profiles.filter((profile) => profile.enabled);
+  if (!activeProfiles.length) {
+    throw new Error("Activez au moins une politique CI.");
+  }
+
+  const usedJobs = new Set<string>();
+  const jobs = activeProfiles.map((profile) => {
+    const profileName = profile.name.trim();
+    if (
+      !profileName ||
+      profileName.length > 60 ||
+      /[\u0000-\u001f\u007f]/.test(profileName)
+    ) {
+      throw new Error("Chaque politique CI doit avoir un nom valide.");
+    }
+    const id = jobId(profile);
+    if (usedJobs.has(id)) {
+      throw new Error("Les identifiants de politique CI doivent être uniques.");
+    }
+    usedJobs.add(id);
+    const command = createCiCommandForProfile(profile, profile.id);
+    const suffix = artifactSuffix(profile.id);
+    const sarifStep = profile.sarif
+      ? `
+      - name: Publier les constats SARIF
+        if: always() && hashFiles('mcp-trustmap${suffix}.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: mcp-trustmap${suffix}.sarif
+          category: ${yamlString(`mcp-trustmap/${profile.environment}`)}`
+      : "";
+
+    return `  ${id}:
+    name: ${yamlString(`TrustMap · ${profileName}`)}
+    runs-on: ubuntu-latest
+    environment: ${yamlString(profile.environment)}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.13
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: ${yamlString(`Appliquer la politique ${profileName}`)}
+        run: ${command}${sarifStep}`;
+  });
+
+  const securityPermission = activeProfiles.some((profile) => profile.sarif)
+    ? "\n  security-events: write"
+    : "";
+
+  return `name: MCP TrustMap policies
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read${securityPermission}
+
+jobs:
+${jobs.join("\n\n")}
 `;
 }
 

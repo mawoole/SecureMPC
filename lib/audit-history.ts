@@ -271,3 +271,64 @@ export function compareAuditHistory(
     resolvedFindings,
   };
 }
+
+function csvCell(value: string | number): string {
+  const text = String(value);
+  return /[;"\r\n]/.test(text)
+    ? `"${text.replaceAll('"', '""')}"`
+    : text;
+}
+
+export function createAuditHistoryCsv(
+  history: AuditHistoryRecord[],
+): string {
+  const chronological = [...history].reverse();
+  const header = [
+    "audit_id",
+    "created_at",
+    "source",
+    "score",
+    "servers",
+    "secure_servers",
+    "critical",
+    "high",
+    "medium",
+    "open_findings",
+    "score_delta",
+    "finding_delta",
+    "introduced_findings",
+    "resolved_findings",
+    "rules",
+  ];
+  const rows = chronological.map((entry, index) => {
+    const comparison = compareAuditHistory(
+      entry,
+      chronological[index - 1],
+    );
+    const rules = [...entry.rules]
+      .sort((left, right) => left.rule.localeCompare(right.rule))
+      .map((rule) => `${rule.rule}:${rule.severity}:${rule.count}`)
+      .join("|");
+    return [
+      entry.id,
+      entry.createdAt,
+      entry.source,
+      entry.score,
+      entry.servers,
+      entry.secure,
+      entry.critical,
+      entry.high,
+      entry.medium,
+      entry.toFix,
+      comparison.scoreDelta,
+      comparison.findingDelta,
+      comparison.introducedFindings,
+      comparison.resolvedFindings,
+      rules,
+    ]
+      .map(csvCell)
+      .join(";");
+  });
+
+  return `\uFEFFsep=;\r\n${header.join(";")}\r\n${rows.join("\r\n")}${rows.length ? "\r\n" : ""}`;
+}
