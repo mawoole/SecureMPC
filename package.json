@@ -16,7 +16,7 @@
     "collect:security": "node --experimental-strip-types tools/collector.ts --probe --osv --provenance --sbom",
     "validate:admission": "node --experimental-strip-types tools/validate-admission.ts",
     "test": "npm run build && npm run test:unit && npm run test:rendered",
-    "test:unit": "node --experimental-strip-types --test tests/audit-engine.test.ts tests/audit-history.test.ts tests/ci-gate.test.ts tests/collector.test.ts tests/finding-exceptions.test.ts tests/kubernetes-admission.test.ts tests/kubernetes-admission-validation.test.ts tests/lockfiles.test.ts tests/oci-provenance.test.ts tests/osv.test.ts tests/pdf-report.test.ts tests/provenance.test.ts tests/supply-chain.test.ts tests/trustmap-modules.test.ts tests/workspaces.test.ts",
+    "test:unit": "node --experimental-strip-types --test tests/audit-engine.test.ts tests/audit-history.test.ts tests/ci-gate.test.ts tests/collector.test.ts tests/finding-exceptions.test.ts tests/kubernetes-admission.test.ts tests/kubernetes-admission-validation.test.ts tests/lockfiles.test.ts tests/oci-provenance.test.ts tests/osv.test.ts tests/pdf-report.test.ts tests/provenance.test.ts tests/supply-chain.test.ts tests/trustmap-governance.test.ts tests/trustmap-modules.test.ts tests/workspaces.test.ts",
     "test:rendered": "node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .vite",
     "db:generate": "drizzle-kit generate"

@@ -10,6 +10,31 @@ import {
   evaluateCiGate,
   type TrustMapCiPolicyProfile,
 } from "../lib/trustmap-modules";
+import {
+  createPolicySigningIdentity,
+  signCiPolicyProfiles,
+  verifySignedCiPolicy,
+} from "../lib/trustmap-governance";
+
+function downloadJson(filename: string, value: unknown) {
+  const url = URL.createObjectURL(
+    new Blob([JSON.stringify(value, null, 2)], {
+      type: "application/json;charset=utf-8",
+    }),
+  );
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function readBoundedFile(file: File, maximumBytes = 256 * 1_024) {
+  if (file.size > maximumBytes) {
+    throw new Error("Le fichier dépasse la limite de 256 Ko.");
+  }
+  return file.text();
+}
 
 export function TrustMapCi({
   servers,
@@ -24,6 +49,17 @@ export function TrustMapCi({
     DEFAULT_TRUSTMAP_CI_PROFILES.map((profile) => ({ ...profile })),
   );
   const [activeProfileId, setActiveProfileId] = useState("production");
+  const [signerLabel, setSignerLabel] = useState("Équipe sécurité");
+  const [signingPassphrase, setSigningPassphrase] = useState("");
+  const [identityDocument, setIdentityDocument] = useState("");
+  const [identityFilename, setIdentityFilename] = useState("");
+  const [policyDocument, setPolicyDocument] = useState("");
+  const [policyFilename, setPolicyFilename] = useState("");
+  const [expectedKeyId, setExpectedKeyId] = useState("");
+  const [observedKeyId, setObservedKeyId] = useState("");
+  const [signatureMessage, setSignatureMessage] = useState("");
+  const [signatureError, setSignatureError] = useState("");
+  const [cryptoBusy, setCryptoBusy] = useState(false);
   const activeProfile =
     profiles.find((profile) => profile.id === activeProfileId) ?? profiles[0];
   const enabledProfiles = useMemo(
@@ -81,6 +117,112 @@ export function TrustMapCi({
   const copy = async (value: string, label: string) => {
     await navigator.clipboard.writeText(value);
     onNotify(`${label} copié dans le presse-papiers`);
+  };
+
+  const createIdentity = async () => {
+    setCryptoBusy(true);
+    setSignatureError("");
+    setSignatureMessage("");
+    try {
+      const identity = await createPolicySigningIdentity(
+        signerLabel,
+        signingPassphrase,
+      );
+      const serialized = JSON.stringify(identity, null, 2);
+      setIdentityDocument(serialized);
+      setIdentityFilename("Identité créée dans cette session");
+      setExpectedKeyId(identity.keyId);
+      setObservedKeyId(identity.keyId);
+      downloadJson(
+        `mcp-trustmap-signing-identity-${new Date().toISOString().slice(0, 10)}.json`,
+        identity,
+      );
+      setSignatureMessage(
+        "Identité créée et téléchargée. Conservez ce fichier chiffré dans un coffre.",
+      );
+      onNotify("Identité de signature chiffrée créée");
+    } catch (error) {
+      setSignatureError(
+        error instanceof Error
+          ? error.message
+          : "L’identité n’a pas pu être créée.",
+      );
+    } finally {
+      setCryptoBusy(false);
+    }
+  };
+
+  const signPolicy = async () => {
+    setCryptoBusy(true);
+    setSignatureError("");
+    setSignatureMessage("");
+    try {
+      if (!identityDocument) {
+        throw new Error("Créez ou chargez d’abord une identité de signature.");
+      }
+      const policy = await signCiPolicyProfiles(
+        profiles,
+        identityDocument,
+        signingPassphrase,
+      );
+      downloadJson(
+        `mcp-trustmap-ci-policy-${new Date().toISOString().slice(0, 10)}.signed.json`,
+        policy,
+      );
+      setObservedKeyId(policy.signer.keyId);
+      setSignatureMessage(
+        `Politique signée par ${policy.signer.label} et téléchargée.`,
+      );
+      setSigningPassphrase("");
+      onNotify("Politique CI signée et exportée");
+    } catch (error) {
+      setSignatureError(
+        error instanceof Error
+          ? error.message
+          : "La politique n’a pas pu être signée.",
+      );
+    } finally {
+      setCryptoBusy(false);
+    }
+  };
+
+  const verifyPolicy = async () => {
+    setCryptoBusy(true);
+    setSignatureError("");
+    setSignatureMessage("");
+    try {
+      if (!policyDocument) {
+        throw new Error("Chargez d’abord un fichier de politique signée.");
+      }
+      const result = await verifySignedCiPolicy(
+        policyDocument,
+        expectedKeyId,
+      );
+      setObservedKeyId(result.keyId);
+      if (!result.trusted) {
+        setSignatureMessage(
+          "Signature valide, mais identité non approuvée. Comparez puis saisissez l’empreinte attendue avant de charger les profils.",
+        );
+        return;
+      }
+      setProfiles(result.profiles.map((profile) => ({ ...profile })));
+      setActiveProfileId(
+        result.profiles.find((profile) => profile.enabled)?.id ??
+          result.profiles[0].id,
+      );
+      setSignatureMessage(
+        `Signature et empreinte validées pour ${result.signerLabel}. Les profils ont été chargés.`,
+      );
+      onNotify("Politique signée vérifiée et chargée");
+    } catch (error) {
+      setSignatureError(
+        error instanceof Error
+          ? error.message
+          : "La politique signée n’a pas pu être vérifiée.",
+      );
+    } finally {
+      setCryptoBusy(false);
+    }
   };
 
   return (
@@ -259,6 +401,158 @@ export function TrustMapCi({
         >
           Copier
         </button>
+      </article>
+
+      <article className="module-card policy-signature-card">
+        <div className="module-card-head">
+          <div>
+            <span className="section-kicker">CHAÎNE DE CONFIANCE</span>
+            <h3>Signer et vérifier les politiques CI</h3>
+          </div>
+          <span className="crypto-badge">ECDSA P-256</span>
+        </div>
+        <p className="crypto-intro">
+          La clé privée est exportée dans une identité chiffrée et ne quitte
+          jamais votre navigateur en clair. Les destinataires approuvent la
+          politique en comparant son empreinte par un canal séparé.
+        </p>
+        <div className="policy-trust-grid">
+          <section>
+            <span className="section-kicker">1 · IDENTITÉ ET SIGNATURE</span>
+            <label>
+              Nom du signataire
+              <input
+                value={signerLabel}
+                maxLength={80}
+                onChange={(event) => setSignerLabel(event.target.value)}
+              />
+            </label>
+            <label>
+              Phrase secrète de l’identité
+              <input
+                type="password"
+                value={signingPassphrase}
+                minLength={12}
+                maxLength={256}
+                autoComplete="new-password"
+                onChange={(event) => setSigningPassphrase(event.target.value)}
+                placeholder="12 caractères minimum"
+              />
+            </label>
+            <label className="file-field">
+              Identité chiffrée
+              <input
+                type="file"
+                accept=".json,application/json"
+                onChange={async (event) => {
+                  const file = event.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    setIdentityDocument(await readBoundedFile(file));
+                    setIdentityFilename(file.name);
+                    setSignatureError("");
+                    setSignatureMessage("Identité chiffrée chargée localement.");
+                  } catch (error) {
+                    setSignatureError(
+                      error instanceof Error
+                        ? error.message
+                        : "L’identité n’a pas pu être lue.",
+                    );
+                  } finally {
+                    event.target.value = "";
+                  }
+                }}
+              />
+              <span>{identityFilename || "Aucun fichier chargé"}</span>
+            </label>
+            <div className="crypto-actions">
+              <button
+                className="button secondary"
+                disabled={cryptoBusy}
+                onClick={createIdentity}
+              >
+                Créer une identité
+              </button>
+              <button
+                className="button primary"
+                disabled={cryptoBusy || Boolean(generationError)}
+                onClick={signPolicy}
+              >
+                Signer et exporter
+              </button>
+            </div>
+          </section>
+          <section>
+            <span className="section-kicker">2 · VÉRIFICATION ET CHARGEMENT</span>
+            <label className="file-field">
+              Politique signée
+              <input
+                type="file"
+                accept=".json,application/json"
+                onChange={async (event) => {
+                  const file = event.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    setPolicyDocument(await readBoundedFile(file));
+                    setPolicyFilename(file.name);
+                    setSignatureError("");
+                    setSignatureMessage("Politique chargée, prête à vérifier.");
+                  } catch (error) {
+                    setSignatureError(
+                      error instanceof Error
+                        ? error.message
+                        : "La politique n’a pas pu être lue.",
+                    );
+                  } finally {
+                    event.target.value = "";
+                  }
+                }}
+              />
+              <span>{policyFilename || "Aucun fichier chargé"}</span>
+            </label>
+            <label>
+              Empreinte approuvée
+              <input
+                value={expectedKeyId}
+                maxLength={71}
+                spellCheck={false}
+                onChange={(event) =>
+                  setExpectedKeyId(event.target.value.toLowerCase())
+                }
+                placeholder="sha256:…"
+              />
+            </label>
+            <button
+              className="button primary"
+              disabled={cryptoBusy || !policyDocument}
+              onClick={verifyPolicy}
+            >
+              Vérifier et charger
+            </button>
+          </section>
+        </div>
+        {observedKeyId ? (
+          <div className="fingerprint">
+            <span>Empreinte observée</span>
+            <code>{observedKeyId}</code>
+            <button
+              className="text-button"
+              onClick={() => copy(observedKeyId, "Empreinte")}
+            >
+              Copier
+            </button>
+          </div>
+        ) : null}
+        {signatureError ? (
+          <p className="form-error" role="alert">
+            {signatureError}
+          </p>
+        ) : null}
+        {signatureMessage ? (
+          <p className="crypto-message" role="status">
+            {signatureMessage}
+          </p>
+        ) : null}
       </article>
     </section>
   );
