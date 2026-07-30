@@ -1053,6 +1053,10 @@ export default function Home() {
                 ou par les attestations GitHub, avec une politique par préfixe
                 et sans lancer le conteneur.
               </li>
+              <li>
+                Ces politiques peuvent générer un bundle d’admission Kubernetes
+                sans contacter ni modifier le cluster.
+              </li>
             </ul>
 
             <label className="file-drop">
@@ -1075,7 +1079,8 @@ export default function Home() {
               Sans probe ni analyse OSV : <code>npm run collect</code>. Ajoutez{" "}
               <code>--path chemin/vers/mcp.json</code> pour un fichier
               personnalisé, ou <code>--oci-policy-file</code> pour plusieurs
-              identités OCI.
+              identités OCI. Utilisez <code>npm run generate:admission</code>{" "}
+              pour préparer leur application dans Kubernetes.
             </p>
           </section>
         </div>
