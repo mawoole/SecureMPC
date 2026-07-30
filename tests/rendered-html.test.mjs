@@ -121,6 +121,7 @@ test("keeps the audit engine separate from the interface", async () => {
   assert.match(packageJson, /validate:admission/);
   assert.match(ciWorkflow, /Generate Kubernetes admission bundle/);
   assert.match(ciWorkflow, /npm run validate:admission/);
+  assert.match(ciWorkflow, /npm audit --omit=dev --audit-level=high/);
   assert.match(layout, /MCP Sentinel — Audit de sécurité MCP/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   let previewFiles = [];
