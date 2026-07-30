@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import {
   basename,
+  extname,
   isAbsolute,
   join,
   posix,
@@ -10,6 +11,7 @@ import {
   resolve,
   win32,
 } from "node:path";
+import { parse as parseToml } from "smol-toml";
 import {
   extractSupplyChainComponents,
   type SupplyChainComponent,
@@ -122,6 +124,7 @@ export type CollectorInventory = {
 export type CandidateFile = {
   client: string;
   path: string;
+  format?: "json" | "toml";
 };
 
 export type DiscoveryContext = {
@@ -202,6 +205,11 @@ export function discoverCandidateFiles(
   const pathApi = platform === "win32" ? win32 : posix;
   const workspace = pathApi.resolve(context.workspace ?? process.cwd());
   const candidates: CandidateFile[] = [
+    {
+      client: "Codex",
+      path: pathApi.join(home, ".codex", "config.toml"),
+      format: "toml",
+    },
     {
       client: "Workspace VS Code",
       path: pathApi.join(workspace, ".vscode", "mcp.json"),
@@ -313,6 +321,7 @@ function extractServers(
       : undefined;
   const candidates = [
     parsed.mcpServers,
+    parsed.mcp_servers,
     parsed.servers,
     nestedMcp?.servers,
     parsed["mcp.servers"],
@@ -738,6 +747,24 @@ function stableServerId(sourcePath: string, name: string): string {
     .slice(0, 16);
 }
 
+function candidateFormat(candidate: CandidateFile): "json" | "toml" {
+  return candidate.format ?? (extname(candidate.path).toLowerCase() === ".toml"
+    ? "toml"
+    : "json");
+}
+
+function parseCandidate(
+  raw: string,
+  candidate: CandidateFile,
+): Record<string, unknown> {
+  const parsed =
+    candidateFormat(candidate) === "toml" ? parseToml(raw) : JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("La racine de la configuration doit être un objet.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
 export async function collectInventory(
   options: CollectOptions = {},
 ): Promise<CollectorInventory> {
@@ -755,6 +782,9 @@ export async function collectInventory(
   const additional = (options.additionalPaths ?? []).map((filePath) => ({
     client: `Fichier explicite (${basename(filePath)})`,
     path: resolve(filePath),
+    format: extname(filePath).toLowerCase() === ".toml"
+      ? "toml" as const
+      : "json" as const,
   }));
   const candidates = deduplicateCandidates([...defaults, ...additional]);
   const sources: CollectorSource[] = [];
@@ -783,24 +813,22 @@ export async function collectInventory(
       continue;
     }
 
-    let parsed: unknown;
+    let parsed: Record<string, unknown>;
     try {
-      parsed = JSON.parse(raw);
+      parsed = parseCandidate(raw, candidate);
     } catch {
+      const format = candidateFormat(candidate).toUpperCase();
       sources.push({
         client: candidate.client,
         path: safePath,
         status: "invalid",
         servers: 0,
-        message: "JSON invalide.",
+        message: `${format} invalide.`,
       });
       continue;
     }
 
-    const container =
-      parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? extractServers(parsed as Record<string, unknown>)
-        : undefined;
+    const container = extractServers(parsed);
     if (!container) {
       sources.push({
         client: candidate.client,
@@ -997,7 +1025,7 @@ export async function collectInventory(
     generatedAt: now().toISOString(),
     collector: {
       name: "MCP Sentinel Collector",
-      version: "1.5.0",
+      version: "1.6.0",
       platform: options.platform ?? process.platform,
       security: {
         secretsRedacted: true,
