@@ -496,3 +496,84 @@ test("turns invalid SLSA or registry proofs into a critical finding", () => {
     "mismatched",
   );
 });
+
+test("imports a verified GitHub OCI attestation without inventing a supply-chain failure", () => {
+  const digest =
+    "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+  const servers = auditConfiguration(
+    JSON.stringify({
+      schemaVersion: "1.0",
+      generatedAt: "2026-07-30T12:00:00.000Z",
+      collector: {
+        name: "MCP Sentinel Collector",
+        version: "1.4.0",
+        platform: "linux",
+      },
+      ociVerification: {
+        provider: "oci-provenance",
+        backend: "github-attestations",
+        status: "complete",
+        checkedAt: "2026-07-30T12:00:00.000Z",
+        images: 1,
+        signaturesVerified: 0,
+        slsaProvenanceVerified: 1,
+        missing: 0,
+        failed: 0,
+        message: "Attestation vérifiée.",
+      },
+      sources: [],
+      servers: [
+        {
+          id: "oci-proof",
+          name: "oci-proof",
+          source: { client: "VS Code", path: ".vscode/mcp.json" },
+          configuration: {
+            command: "docker",
+            args: ["run", `ghcr.io/acme/mcp@${digest}`],
+          },
+          redactions: [],
+          components: [
+            {
+              id: "oci-acme-mcp",
+              name: "ghcr.io/acme/mcp",
+              ecosystem: "oci",
+              componentType: "container",
+              version: digest,
+              purl: `pkg:docker/ghcr.io/acme/mcp@${encodeURIComponent(digest)}`,
+              pinStatus: "pinned",
+              reference: `ghcr.io/acme/mcp@${digest}`,
+              evidence: "Image OCI verrouillée.",
+              scope: "direct",
+              provenance: {
+                provider: "oci-github-attestation",
+                checkedAt: "2026-07-30T12:00:00.000Z",
+                registrySignature: "not-applicable",
+                slsaProvenance: "verified",
+                subjectDigest: "matched",
+                identityPolicy: "matched",
+                sourceRepository: "https://github.com/acme/mcp",
+                message: "Attestation et digest vérifiés.",
+              },
+            },
+          ],
+          probe: {
+            status: "skipped-stdio",
+            checkedAt: "2026-07-30T12:00:00.000Z",
+            durationMs: 0,
+            message: "Serveur stdio non exécuté.",
+          },
+        },
+      ],
+    }),
+  );
+
+  assert.equal(servers[0].ociVerification?.status, "complete");
+  assert.equal(
+    servers[0].components?.[0].provenance?.provider,
+    "oci-github-attestation",
+  );
+  assert.equal(
+    servers[0].findings.some((finding) => finding.rule === "MCP-SUP-03"),
+    false,
+  );
+});

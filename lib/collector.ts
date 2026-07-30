@@ -16,6 +16,12 @@ import {
 } from "./supply-chain.ts";
 import type { VulnerabilityScanSummary } from "./osv.ts";
 import {
+  verifyOciProvenance,
+  type OciVerificationPolicy,
+  type OciVerificationSummary,
+  type VerificationCommandRunner,
+} from "./oci-provenance.ts";
+import {
   analyzeLockfile,
   discoverLockfilePaths,
   enrichComponentsFromLockfiles,
@@ -101,6 +107,7 @@ export type CollectorInventory = {
       secretsRedacted: true;
       configuredCredentialsSent: false;
       stdioProcessesExecuted: false;
+      ociImagesExecuted: false;
     };
   };
   sources: CollectorSource[];
@@ -108,6 +115,7 @@ export type CollectorInventory = {
   lockfiles?: LockfileSummary[];
   vulnerabilityScan?: VulnerabilityScanSummary;
   provenanceScan?: ProvenanceScanSummary;
+  ociVerification?: OciVerificationSummary;
 };
 
 export type CandidateFile = {
@@ -133,6 +141,10 @@ export type CollectOptions = DiscoveryContext & {
   lockfilePaths?: string[];
   verifyProvenance?: boolean;
   provenancePolicy?: ProvenancePolicy;
+  verifyOciProvenance?: boolean;
+  ociVerificationPolicy?: OciVerificationPolicy;
+  ociVerifierExecutable?: string;
+  verificationCommandRunner?: VerificationCommandRunner;
 };
 
 const SENSITIVE_KEY =
@@ -606,7 +618,7 @@ export async function probeConfiguration(
           capabilities: {},
           clientInfo: {
             name: "mcp-sentinel-collector",
-            version: "1.3.0",
+            version: "1.4.0",
           },
         },
       }),
@@ -941,17 +953,44 @@ export async function collectInventory(
     provenanceScan = verification.summary;
   }
 
+  let ociVerification: OciVerificationSummary | undefined;
+  if (options.verifyOciProvenance) {
+    if (!options.ociVerificationPolicy) {
+      throw new Error(
+        "Une politique d’identité OCI est requise pour vérifier les preuves.",
+      );
+    }
+    const componentCounts = servers.map((server) => server.components.length);
+    const verification = await verifyOciProvenance(
+      servers.flatMap((server) => server.components),
+      {
+        policy: options.ociVerificationPolicy,
+        now,
+        executable: options.ociVerifierExecutable,
+        commandRunner: options.verificationCommandRunner,
+      },
+    );
+    let cursor = 0;
+    servers.forEach((server, index) => {
+      const count = componentCounts[index];
+      server.components = verification.components.slice(cursor, cursor + count);
+      cursor += count;
+    });
+    ociVerification = verification.summary;
+  }
+
   return {
     schemaVersion: COLLECTOR_SCHEMA_VERSION,
     generatedAt: now().toISOString(),
     collector: {
       name: "MCP Sentinel Collector",
-      version: "1.3.0",
+      version: "1.4.0",
       platform: options.platform ?? process.platform,
       security: {
         secretsRedacted: true,
         configuredCredentialsSent: false,
         stdioProcessesExecuted: false,
+        ociImagesExecuted: false,
       },
     },
     sources,
@@ -966,5 +1005,6 @@ export async function collectInventory(
         }
       : {}),
     ...(provenanceScan ? { provenanceScan } : {}),
+    ...(ociVerification ? { ociVerification } : {}),
   };
 }
