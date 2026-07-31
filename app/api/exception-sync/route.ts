@@ -9,6 +9,16 @@ import {
   serializeExceptionEnvelope,
 } from "../../../lib/enterprise-sync";
 import {
+  applyRiskExceptionDecision,
+  EnterpriseAuthorizationError,
+  normalizeStoredRiskException,
+  prepareRiskExceptionForSync,
+  resolveEnterpriseRole,
+  roleCapabilities,
+  type EnterpriseActor,
+  type ExceptionDecision,
+} from "../../../lib/enterprise-authorization";
+import {
   parseRiskExceptions,
   type RiskException,
 } from "../../../lib/finding-exceptions";
@@ -16,7 +26,6 @@ import {
   createKeyManagementProvider,
   KeyManagementConfigurationError,
 } from "../../../lib/key-management";
-import { mergeRiskExceptions } from "../../../lib/trustmap-governance";
 
 export const dynamic = "force-dynamic";
 
@@ -89,21 +98,22 @@ function decodeDisplayName(request: Request): string | null {
   }
 }
 
-async function authenticatedActor(request: Request): Promise<{
-  actorHash: string;
-  displayName: string;
-} | null> {
+async function authenticatedActor(
+  request: Request,
+): Promise<EnterpriseActor | null> {
   const email = request.headers
     .get(AUTHENTICATED_EMAIL_HEADER)
     ?.trim()
     .toLowerCase();
-  const identity = email || (isLocalRequest(request) ? "local-preview" : "");
+  const localPreview = isLocalRequest(request);
+  const identity = email || (localPreview ? "local-preview" : "");
   if (!identity) return null;
   return {
     actorHash: await sha256(`mcp-trustmap:exception-sync:actor:${identity}`),
     displayName:
       decodeDisplayName(request) ??
       (email ? email.slice(0, 160) : "Aperçu local"),
+    role: resolveEnterpriseRole(email ?? null, runtime, localPreview),
   };
 }
 
@@ -153,6 +163,42 @@ async function readExceptions(request: Request): Promise<RiskException[]> {
   return parsed;
 }
 
+async function readDecision(request: Request): Promise<{
+  exceptionId: string;
+  action: ExceptionDecision;
+}> {
+  const contentType = request.headers.get("Content-Type") ?? "";
+  if (!contentType.toLowerCase().startsWith("application/json")) {
+    throw new SyncValidationError("invalid-request");
+  }
+  const raw = await request.text();
+  if (new TextEncoder().encode(raw).byteLength > 2_000) {
+    throw new SyncValidationError("invalid-request");
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(raw) as unknown;
+  } catch {
+    throw new SyncValidationError("invalid-json");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new SyncValidationError("invalid-payload");
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.exceptionId !== "string" ||
+    !record.exceptionId.trim() ||
+    record.exceptionId.length > 120 ||
+    !["approve", "reject"].includes(String(record.action))
+  ) {
+    throw new SyncValidationError("invalid-decision");
+  }
+  return {
+    exceptionId: record.exceptionId,
+    action: record.action as ExceptionDecision,
+  };
+}
+
 async function readStoredRows(spaceId: string): Promise<StoredExceptionRow[]> {
   const result = await getD1()
     .prepare(
@@ -180,12 +226,13 @@ async function decryptRow(
     envelope.provider,
     envelope.keyId,
   );
-  return decryptSyncedRiskException(
+  const decrypted = await decryptSyncedRiskException(
     envelope,
     provider,
     spaceId,
     row.record_key,
   );
+  return normalizeStoredRiskException(decrypted, row.actor_hash);
 }
 
 async function listSharedExceptions(
@@ -217,7 +264,13 @@ async function appendAuditEvent(
   spaceId: string,
   recordKey: string,
   actorHash: string,
-  action: "upserted" | "revoked" | "rekeyed",
+  action:
+    | "upserted"
+    | "revoked"
+    | "rekeyed"
+    | "approval-requested"
+    | "approved"
+    | "rejected",
   version: number,
   createdAt: number,
 ) {
@@ -241,7 +294,7 @@ async function appendAuditEvent(
 
 async function upsertException(
   spaceId: string,
-  actorHash: string,
+  actor: EnterpriseActor,
   incoming: RiskException,
 ): Promise<boolean> {
   const recordKey = await createExceptionRecordKey(spaceId, incoming.id);
@@ -257,9 +310,11 @@ async function upsertException(
     const existing = existingRow
       ? await decryptRow(existingRow, spaceId)
       : undefined;
-    const merged = existing
-      ? mergeRiskExceptions([existing], [incoming])[0]
-      : incoming;
+    const merged = prepareRiskExceptionForSync(
+      incoming,
+      actor.actorHash,
+      existing,
+    );
     const provider = createKeyManagementProvider(runtime);
     const existingEnvelope = existingRow
       ? parseExceptionEnvelope(existingRow.envelope)
@@ -289,7 +344,7 @@ async function upsertException(
           )
           .bind(
             serializeExceptionEnvelope(envelope),
-            actorHash,
+            actor.actorHash,
             updatedAt,
             version,
             recordKey,
@@ -307,7 +362,7 @@ async function upsertException(
             recordKey,
             spaceId,
             serializeExceptionEnvelope(envelope),
-            actorHash,
+            actor.actorHash,
             updatedAt,
             version,
           )
@@ -316,12 +371,14 @@ async function upsertException(
       await appendAuditEvent(
         spaceId,
         recordKey,
-        actorHash,
+        actor.actorHash,
         requiresRekey
           ? "rekeyed"
           : merged.revokedAt
             ? "revoked"
-            : "upserted",
+            : merged.approval?.status === "pending"
+              ? "approval-requested"
+              : "upserted",
         version,
         updatedAt,
       );
@@ -329,6 +386,70 @@ async function upsertException(
     }
   }
   throw new Error("Conflit de synchronisation persistant.");
+}
+
+async function applyStoredDecision(
+  spaceId: string,
+  actor: EnterpriseActor,
+  exceptionId: string,
+  action: ExceptionDecision,
+): Promise<void> {
+  const recordKey = await createExceptionRecordKey(spaceId, exceptionId);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const existingRow = await getD1()
+      .prepare(
+        `SELECT record_key, envelope, actor_hash, updated_at, version
+         FROM exception_sync_records
+         WHERE record_key = ? AND space_id = ?`,
+      )
+      .bind(recordKey, spaceId)
+      .first<StoredExceptionRow>();
+    if (!existingRow) {
+      throw new EnterpriseAuthorizationError(
+        "L’exception demandée est introuvable.",
+        404,
+      );
+    }
+    const existing = await decryptRow(existingRow, spaceId);
+    const decided = applyRiskExceptionDecision(existing, actor, action);
+    const provider = createKeyManagementProvider(runtime);
+    const envelope = await encryptSyncedRiskException(
+      decided,
+      provider,
+      spaceId,
+      recordKey,
+    );
+    const updatedAt = Date.now();
+    const version = existingRow.version + 1;
+    const result = await getD1()
+      .prepare(
+        `UPDATE exception_sync_records
+         SET envelope = ?, actor_hash = ?, updated_at = ?, version = ?
+         WHERE record_key = ? AND space_id = ? AND version = ?`,
+      )
+      .bind(
+        serializeExceptionEnvelope(envelope),
+        actor.actorHash,
+        updatedAt,
+        version,
+        recordKey,
+        spaceId,
+        existingRow.version,
+      )
+      .run();
+    if ((result.meta.changes ?? 0) === 1) {
+      await appendAuditEvent(
+        spaceId,
+        recordKey,
+        actor.actorHash,
+        action === "approve" ? "approved" : "rejected",
+        version,
+        updatedAt,
+      );
+      return;
+    }
+  }
+  throw new Error("Conflit d’approbation persistant.");
 }
 
 async function trimAuditEvents(spaceId: string) {
@@ -349,7 +470,7 @@ async function trimAuditEvents(spaceId: string) {
 
 async function syncMetadata(
   request: Request,
-  actor: { actorHash: string; displayName: string },
+  actor: EnterpriseActor,
   spaceId: string,
 ) {
   const provider = createKeyManagementProvider(runtime);
@@ -366,6 +487,8 @@ async function syncMetadata(
   return {
     authenticated: true,
     identity: actor.displayName,
+    role: actor.role,
+    capabilities: roleCapabilities(actor.role),
     actorRef: actor.actorHash.slice(0, 12),
     workspaceRef: spaceId.slice(-12),
     kms: provider.status(),
@@ -411,12 +534,18 @@ export async function PUT(request: Request) {
     if (!actor) {
       return responseJson({ error: "Authentification SSO requise." }, 401);
     }
+    if (!roleCapabilities(actor.role).canSync) {
+      return responseJson(
+        { error: "Le rôle lecteur ne peut pas modifier le registre." },
+        403,
+      );
+    }
     const incoming = await readExceptions(request);
     await ensureExceptionSyncSchema();
     const spaceId = await workspaceId();
     let changed = 0;
     for (const exception of incoming) {
-      if (await upsertException(spaceId, actor.actorHash, exception)) changed += 1;
+      if (await upsertException(spaceId, actor, exception)) changed += 1;
     }
     await trimAuditEvents(spaceId);
     const shared = await listSharedExceptions(spaceId);
@@ -426,6 +555,9 @@ export async function PUT(request: Request) {
       sync: await syncMetadata(request, actor, spaceId),
     });
   } catch (error) {
+    if (error instanceof EnterpriseAuthorizationError) {
+      return responseJson({ error: error.message }, error.status);
+    }
     const invalid =
       error instanceof SyncValidationError || error instanceof SyntaxError;
     const configuration = error instanceof KeyManagementConfigurationError;
@@ -436,6 +568,51 @@ export async function PUT(request: Request) {
           : configuration
             ? "Le fournisseur de clés n’est pas configuré."
             : "La synchronisation chiffrée a échoué.",
+      },
+      invalid ? 400 : configuration ? 503 : 500,
+    );
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    if (!sameOrigin(request)) {
+      return responseJson({ error: "Origine de requête refusée." }, 403);
+    }
+    const actor = await authenticatedActor(request);
+    if (!actor) {
+      return responseJson({ error: "Authentification SSO requise." }, 401);
+    }
+    const decision = await readDecision(request);
+    await ensureExceptionSyncSchema();
+    const spaceId = await workspaceId();
+    await applyStoredDecision(
+      spaceId,
+      actor,
+      decision.exceptionId,
+      decision.action,
+    );
+    await trimAuditEvents(spaceId);
+    const shared = await listSharedExceptions(spaceId);
+    return responseJson({
+      ...shared,
+      changed: 1,
+      sync: await syncMetadata(request, actor, spaceId),
+    });
+  } catch (error) {
+    if (error instanceof EnterpriseAuthorizationError) {
+      return responseJson({ error: error.message }, error.status);
+    }
+    const invalid =
+      error instanceof SyncValidationError || error instanceof SyntaxError;
+    const configuration = error instanceof KeyManagementConfigurationError;
+    return responseJson(
+      {
+        error: invalid
+          ? "La décision d’approbation envoyée est invalide."
+          : configuration
+            ? "Le fournisseur de clés n’est pas configuré."
+            : "La décision d’approbation n’a pas pu être enregistrée.",
       },
       invalid ? 400 : configuration ? 503 : 500,
     );

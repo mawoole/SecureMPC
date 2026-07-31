@@ -26,6 +26,13 @@ function createWorker() {
       TRUSTMAP_KMS_MASTER_KEY:
         "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
       TRUSTMAP_WORKSPACE_ID: "render-test-workspace",
+      TRUSTMAP_ROLE_BINDINGS: JSON.stringify({
+        "requester@example.test": "auditor",
+        "auditor-one@example.test": "auditor",
+        "auditor-two@example.test": "auditor",
+        "admin@example.test": "admin",
+        "reader@example.test": "reader",
+      }),
     },
   });
 }
@@ -139,7 +146,7 @@ test("persists aggregate audit history in the Worker runtime", async () => {
   }
 });
 
-test("synchronizes SSO-attributed exceptions as KMS envelopes", async () => {
+test("enforces RBAC and two-person approval on encrypted exceptions", async () => {
   const worker = createWorker();
   try {
     const exception = {
@@ -154,6 +161,7 @@ test("synchronizes SSO-attributed exceptions as KMS envelopes", async () => {
       owner: "Équipe Platform",
       createdAt: "2026-07-30T10:00:00.000Z",
       expiresAt: "2026-08-15T23:59:59.999Z",
+      severity: "critical",
     };
     const unauthenticated = await worker.dispatchFetch(
       "https://secure.example/api/exception-sync",
@@ -173,13 +181,28 @@ test("synchronizes SSO-attributed exceptions as KMS envelopes", async () => {
     );
     assert.equal(crossOrigin.status, 403);
 
-    const created = await worker.dispatchFetch(
-      "http://localhost/api/exception-sync",
+    const readerWrite = await worker.dispatchFetch(
+      "https://secure.example/api/exception-sync",
       {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
-          Origin: "http://localhost",
+          Origin: "https://secure.example",
+          "oai-authenticated-user-email": "reader@example.test",
+        },
+        body: JSON.stringify({ exceptions: [exception] }),
+      },
+    );
+    assert.equal(readerWrite.status, 403);
+
+    const created = await worker.dispatchFetch(
+      "https://secure.example/api/exception-sync",
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "https://secure.example",
+          "oai-authenticated-user-email": "requester@example.test",
         },
         body: JSON.stringify({ exceptions: [exception] }),
       },
@@ -189,44 +212,71 @@ test("synchronizes SSO-attributed exceptions as KMS envelopes", async () => {
     const createdBody = JSON.parse(createdText);
     assert.equal(createdBody.changed, 1);
     assert.equal(createdBody.exceptions.length, 1);
+    assert.equal(createdBody.exceptions[0].approval.status, "pending");
+    assert.equal(createdBody.exceptions[0].approval.approvals.length, 0);
     assert.equal(createdBody.sync.kms.keyId, "render-test-key:v1");
-    assert.equal(createdBody.sync.identity, "Aperçu local");
+    assert.equal(createdBody.sync.role, "auditor");
 
-    const revoked = {
-      ...exception,
-      revokedAt: "2026-08-01T08:00:00.000Z",
-    };
-    const updated = await worker.dispatchFetch(
-      "http://localhost/api/exception-sync",
-      {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "http://localhost",
-        },
-        body: JSON.stringify({ exceptions: [revoked] }),
-      },
-    );
-    const updatedText = await updated.text();
-    assert.equal(updated.status, 200, updatedText);
-    const updatedBody = JSON.parse(updatedText);
-    assert.equal(updatedBody.exceptions[0].revokedAt, revoked.revokedAt);
-
-    const ssoListed = await worker.dispatchFetch(
+    const requesterApproval = await worker.dispatchFetch(
       "https://secure.example/api/exception-sync",
       {
+        method: "PATCH",
         headers: {
-          "oai-authenticated-user-email": "auditor@example.test",
+          "Content-Type": "application/json",
+          Origin: "https://secure.example",
+          "oai-authenticated-user-email": "requester@example.test",
+        },
+        body: JSON.stringify({
+          exceptionId: exception.id,
+          action: "approve",
+        }),
+      },
+    );
+    assert.equal(requesterApproval.status, 409);
+
+    const firstApproval = await worker.dispatchFetch(
+      "https://secure.example/api/exception-sync",
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "https://secure.example",
+          "oai-authenticated-user-email": "auditor-one@example.test",
           "oai-authenticated-user-full-name": "Auditrice%20MCP",
           "oai-authenticated-user-full-name-encoding":
             "percent-encoded-utf-8",
         },
+        body: JSON.stringify({
+          exceptionId: exception.id,
+          action: "approve",
+        }),
       },
     );
-    assert.equal(ssoListed.status, 200);
-    const ssoBody = await ssoListed.json();
-    assert.equal(ssoBody.sync.identity, "Auditrice MCP");
-    assert.equal(ssoBody.exceptions[0].revokedAt, revoked.revokedAt);
+    const firstApprovalBody = await firstApproval.json();
+    assert.equal(firstApproval.status, 200);
+    assert.equal(firstApprovalBody.sync.identity, "Auditrice MCP");
+    assert.equal(firstApprovalBody.exceptions[0].approval.status, "pending");
+    assert.equal(firstApprovalBody.exceptions[0].approval.approvals.length, 1);
+
+    const secondApproval = await worker.dispatchFetch(
+      "https://secure.example/api/exception-sync",
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "https://secure.example",
+          "oai-authenticated-user-email": "auditor-two@example.test",
+        },
+        body: JSON.stringify({
+          exceptionId: exception.id,
+          action: "approve",
+        }),
+      },
+    );
+    const secondApprovalBody = await secondApproval.json();
+    assert.equal(secondApproval.status, 200);
+    assert.equal(secondApprovalBody.exceptions[0].approval.status, "approved");
+    assert.equal(secondApprovalBody.exceptions[0].approval.approvals.length, 2);
 
     const database = await worker.getD1Database("DB");
     const stored = await database
@@ -238,7 +288,7 @@ test("synchronizes SSO-attributed exceptions as KMS envelopes", async () => {
     assert.match(stored.actor_hash, /^[a-f0-9]{64}$/);
     assert.doesNotMatch(
       stored.envelope,
-      /Remote MCP|SEC-42|exception-sync-1/u,
+      /Remote MCP|SEC-42|exception-sync-1|requester@example/u,
     );
   } finally {
     await worker.dispose();
@@ -264,6 +314,7 @@ test("keeps the audit engine separate from the interface", async () => {
     auditHistoryRoute,
     exceptionSync,
     exceptionSyncRoute,
+    enterpriseAuthorization,
     keyManagement,
     packageJson,
     ciWorkflow,
@@ -295,6 +346,10 @@ test("keeps the audit engine separate from the interface", async () => {
     readFile(new URL("../lib/enterprise-sync.ts", import.meta.url), "utf8"),
     readFile(
       new URL("../app/api/exception-sync/route.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../lib/enterprise-authorization.ts", import.meta.url),
       "utf8",
     ),
     readFile(new URL("../lib/key-management.ts", import.meta.url), "utf8"),
@@ -338,6 +393,9 @@ test("keeps the audit engine separate from the interface", async () => {
   assert.match(exceptionSync, /encryptSyncedRiskException/);
   assert.match(exceptionSyncRoute, /oai-authenticated-user-email/);
   assert.match(exceptionSyncRoute, /sameOrigin/);
+  assert.match(exceptionSyncRoute, /export async function PATCH/);
+  assert.match(enterpriseAuthorization, /resolveEnterpriseRole/);
+  assert.match(enterpriseAuthorization, /applyRiskExceptionDecision/);
   assert.match(keyManagement, /createKeyManagementProvider/);
   assert.match(keyManagement, /AES-GCM/);
   assert.match(page, /\/api\/audit-history/);

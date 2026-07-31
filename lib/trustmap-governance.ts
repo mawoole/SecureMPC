@@ -585,6 +585,23 @@ function chooseException(
   }
   if (incoming.revokedAt) return incoming;
   if (current.revokedAt) return current;
+  const currentApprovalProgress = current.approval
+    ? current.approval.status === "pending"
+      ? 1 + current.approval.approvals.length
+      : 4
+    : 0;
+  const incomingApprovalProgress = incoming.approval
+    ? incoming.approval.status === "pending"
+      ? 1 + incoming.approval.approvals.length
+      : 4
+    : 0;
+  if (incomingApprovalProgress !== currentApprovalProgress) {
+    return incomingApprovalProgress > currentApprovalProgress
+      ? incoming
+      : current;
+  }
+  if (!current.severity && incoming.severity) return incoming;
+  if (current.severity && !incoming.severity) return current;
   return Date.parse(incoming.createdAt) > Date.parse(current.createdAt)
     ? incoming
     : current;

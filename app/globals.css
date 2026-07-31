@@ -1904,7 +1904,7 @@ button.table-row:hover {
   border: 1px solid var(--line);
   border-radius: 12px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   overflow: hidden;
 }
 
@@ -1954,6 +1954,73 @@ button.table-row:hover {
   font-size: 9px;
   line-height: 1.5;
   margin: 0;
+}
+
+.approval-card {
+  border-color: #d9d2f2;
+  padding: 25px;
+}
+
+.approval-list {
+  display: grid;
+  gap: 10px;
+}
+
+.approval-row,
+.approval-empty {
+  align-items: center;
+  background: var(--ivory);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  padding: 16px;
+}
+
+.approval-row strong,
+.approval-empty strong {
+  font-size: 10px;
+}
+
+.approval-row p,
+.approval-empty p,
+.role-hint {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+  margin: 5px 0;
+}
+
+.approval-row small {
+  color: var(--subtle);
+  font-size: 8px;
+}
+
+.approval-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.approval-empty {
+  justify-content: flex-start;
+}
+
+.approval-empty > span {
+  align-items: center;
+  background: var(--green-soft);
+  border-radius: 50%;
+  color: var(--green-dark);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 30px;
+  justify-content: center;
+  width: 30px;
+}
+
+.role-hint {
+  margin-bottom: 0;
 }
 
 .crypto-badge {
@@ -2647,6 +2714,16 @@ button.table-row:hover {
 .exception-status.active {
   background: var(--amber-soft);
   color: #8d5a0f;
+}
+
+.exception-status.pending {
+  background: #eee9ff;
+  color: #5d40a5;
+}
+
+.exception-status.rejected {
+  background: var(--coral-soft);
+  color: #a0352f;
 }
 
 .exception-status.expired {
@@ -3505,6 +3582,16 @@ button.table-row:hover {
   border-color: #e6c985;
 }
 
+.finding-exception.pending {
+  background: #f5f1ff;
+  border-color: #d5c9f2;
+}
+
+.finding-exception.rejected {
+  background: var(--coral-soft);
+  border-color: #ecc1bc;
+}
+
 .finding-exception.expired {
   background: var(--coral-soft);
   border-color: #ecc1bc;
@@ -3525,6 +3612,14 @@ button.table-row:hover {
 }
 
 .finding-exception.expired .finding-exception-head span {
+  color: var(--coral);
+}
+
+.finding-exception.pending .finding-exception-head span {
+  color: #5d40a5;
+}
+
+.finding-exception.rejected .finding-exception-head span {
   color: var(--coral);
 }
 
@@ -3838,8 +3933,17 @@ button.table-row:hover {
     border-right: 0;
   }
 
-  .sync-facts > div:nth-child(-n + 2) {
+  .sync-facts > div:nth-child(4) {
+    border-right: 0;
+  }
+
+  .sync-facts > div:not(:last-child) {
     border-bottom: 1px solid var(--line);
+  }
+
+  .sync-facts > div:last-child {
+    border-right: 0;
+    grid-column: 1 / -1;
   }
 
   .exception-sync-grid .crypto-actions {
@@ -4037,6 +4141,11 @@ button.table-row:hover {
   }
 
   .automatic-sync-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .approval-row {
     align-items: stretch;
     flex-direction: column;
   }
