@@ -1,6 +1,6 @@
 # MCP TrustMap
 
-[![CI](https://github.com/mawoole/SecureMPC/actions/workflows/ci.yml/badge.svg)](https://github.com/mawoole/SecureMPC/actions/workflows/ci.yml)
+[![CI](https://github.com/mawoole/MCPTrustMap/actions/workflows/ci.yml/badge.svg)](https://github.com/mawoole/MCPTrustMap/actions/workflows/ci.yml)
 
 ![Aperçu MCP TrustMap](public/og.png)
 
@@ -125,8 +125,8 @@ et renouvelez-la.
 ### Installation
 
 ```bash
-git clone https://github.com/mawoole/SecureMPC.git
-cd SecureMPC
+git clone https://github.com/mawoole/MCPTrustMap.git
+cd MCPTrustMap
 npm ci
 npm run dev
 ```
