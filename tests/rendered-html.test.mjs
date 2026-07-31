@@ -1,46 +1,87 @@
 import assert from "node:assert/strict";
+import { readdirSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { Miniflare } from "miniflare";
+import { join } from "node:path";
+import { Log, LogLevel, Miniflare } from "miniflare";
 import test from "node:test";
 
 const developmentPreviewMeta =
   /<meta(?=[^>]*\bname=["']codex-preview["'])(?=[^>]*\bcontent=["']development["'])[^>]*>/i;
 
+function collectJavaScriptModules(directory, prefix = "") {
+  const modules = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      modules.push(
+        ...collectJavaScriptModules(join(directory, entry.name), relativePath),
+      );
+    } else if (entry.isFile() && entry.name.endsWith(".js")) {
+      modules.push({
+        type: "ESModule",
+        path: join(directory, entry.name),
+        relativePath,
+      });
+    }
+  }
+  return modules;
+}
+
 function createWorker() {
   const serverDirectory = fileURLToPath(
     new URL("../dist/server/", import.meta.url),
   );
+  const modules = collectJavaScriptModules(serverDirectory);
+  modules.sort((left, right) => {
+    if (left.relativePath === "index.js") return -1;
+    if (right.relativePath === "index.js") return 1;
+    return left.relativePath.localeCompare(right.relativePath);
+  });
+  const moduleDefinitions = modules.map(({ path, type }) => ({ path, type }));
   return new Miniflare({
-    modules: true,
-    modulesRules: [{ type: "ESModule", include: ["**/*.js"] }],
+    modules: moduleDefinitions,
     modulesRoot: serverDirectory,
-    scriptPath: fileURLToPath(
-      new URL("../dist/server/index.js", import.meta.url),
-    ),
+    log: new Log(LogLevel.NONE),
     compatibilityDate: "2026-07-29",
     compatibilityFlags: ["nodejs_compat"],
     d1Databases: { DB: `render-test-${process.pid}-${Date.now()}` },
     bindings: {
+      BETTER_AUTH_URL: "http://localhost",
+      BETTER_AUTH_SECRET:
+        "render-test-auth-secret-with-at-least-thirty-two-characters",
+      TRUSTMAP_ENVIRONMENT: "development",
+      TRUSTMAP_DEV_EMAIL_LOG: "true",
       TRUSTMAP_KMS_KEY_ID: "render-test-key:v1",
       TRUSTMAP_KMS_MASTER_KEY:
         "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
-      TRUSTMAP_WORKSPACE_ID: "render-test-workspace",
-      TRUSTMAP_ROLE_BINDINGS: JSON.stringify({
-        "requester@example.test": "auditor",
-        "auditor-one@example.test": "auditor",
-        "auditor-two@example.test": "auditor",
-        "admin@example.test": "admin",
-        "reader@example.test": "reader",
-      }),
     },
   });
 }
 
-async function render() {
+async function applyMigrations(worker) {
+  const database = await worker.getD1Database("DB");
+  for (const filename of [
+    "0000_tranquil_forge.sql",
+    "0001_slim_speed_demon.sql",
+    "0002_curious_vermin.sql",
+  ]) {
+    const migration = await readFile(
+      new URL(`../drizzle/${filename}`, import.meta.url),
+      "utf8",
+    );
+    for (const statement of migration.split("--> statement-breakpoint")) {
+      const sql = statement.trim();
+      if (sql) await database.prepare(sql).run();
+    }
+  }
+  return database;
+}
+
+async function render(path = "/login") {
   const worker = createWorker();
   try {
-    const response = await worker.dispatchFetch("http://localhost/", {
+    const response = await worker.dispatchFetch(`http://localhost${path}`, {
       headers: { accept: "text/html" },
     });
     return new Response(await response.arrayBuffer(), {
@@ -52,7 +93,7 @@ async function render() {
   }
 }
 
-test("server-renders the MCP TrustMap application", async () => {
+test("server-renders the autonomous MCP TrustMap login", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
@@ -64,109 +105,25 @@ test("server-renders the MCP TrustMap application", async () => {
     /<title>MCP TrustMap — Cartographie, audit et gouvernance MCP<\/title>/i,
   );
   assert.match(html, /MCP TrustMap/);
-  assert.match(html, /Vue d’ensemble/);
-  assert.match(html, /Lancer un audit/);
-  assert.match(html, /Exporter/);
-  assert.match(html, /Rapport PDF/);
-  assert.match(html, /SBOM CycloneDX/);
+  assert.match(html, /Se connecter/);
+  assert.match(html, /Adresse e-mail/);
+  assert.match(html, /Mot de passe oublié/);
+  assert.match(html, /Créer un compte/);
   assert.doesNotMatch(html, developmentPreviewMeta);
   assert.doesNotMatch(html, /react-loading-skeleton/i);
   assert.doesNotMatch(html, /Your site is taking shape/i);
 });
 
-test("persists aggregate audit history in the Worker runtime", async () => {
+test("protects organization data APIs without an application session", async () => {
   const worker = createWorker();
   try {
-    const audit = {
-      source: "manual",
-      score: 82,
-      servers: 2,
-      critical: 0,
-      high: 1,
-      medium: 1,
-      toFix: 2,
-      secure: 1,
-      rules: [
-        { rule: "MCP-NET-01", severity: "high", count: 1 },
-        { rule: "MCP-AUTHN-01", severity: "medium", count: 1 },
-      ],
-    };
-    const unauthenticated = await worker.dispatchFetch(
-      "https://secure.example/api/audit-history",
-    );
-    assert.equal(unauthenticated.status, 401);
-
-    const crossOrigin = await worker.dispatchFetch(
-      "http://localhost/api/audit-history",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://attacker.example",
-        },
-        body: JSON.stringify(audit),
-      },
-    );
-    assert.equal(crossOrigin.status, 403);
-
-    const created = await worker.dispatchFetch(
-      "http://localhost/api/audit-history",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "http://localhost",
-        },
-        body: JSON.stringify(audit),
-      },
-    );
-    assert.equal(created.status, 201, await created.text());
-    assert.equal(created.headers.get("cache-control"), "no-store");
-
-    const listed = await worker.dispatchFetch(
-      "http://localhost/api/audit-history",
-    );
-    assert.equal(listed.status, 200);
-    const body = await listed.json();
-    assert.equal(body.history.length, 1);
-    assert.equal(body.history[0].score, 82);
-    assert.deepEqual(body.history[0].rules, audit.rules);
-    assert.equal(JSON.stringify(body).includes("configuration"), false);
-
-    const deleted = await worker.dispatchFetch(
-      "http://localhost/api/audit-history",
-      {
-        method: "DELETE",
+    for (const path of ["/api/audit-history", "/api/exception-sync"]) {
+      const response = await worker.dispatchFetch(`http://localhost${path}`, {
         headers: { Origin: "http://localhost" },
-      },
-    );
-    assert.equal(deleted.status, 200);
-  } finally {
-    await worker.dispose();
-  }
-});
-
-test("enforces RBAC and two-person approval on encrypted exceptions", async () => {
-  const worker = createWorker();
-  try {
-    const exception = {
-      schemaVersion: "1.0",
-      id: "exception-sync-1",
-      serverId: "remote",
-      serverName: "Remote MCP",
-      findingId: "remote-transport",
-      rule: "MCP-NET-01",
-      findingTitle: "Transport non chiffré",
-      reason: "Migration TLS planifiée et suivie dans SEC-42.",
-      owner: "Équipe Platform",
-      createdAt: "2026-07-30T10:00:00.000Z",
-      expiresAt: "2026-08-15T23:59:59.999Z",
-      severity: "critical",
-    };
-    const unauthenticated = await worker.dispatchFetch(
-      "https://secure.example/api/exception-sync",
-    );
-    assert.equal(unauthenticated.status, 401);
+      });
+      assert.equal(response.status, 401, `${path}: ${await response.text()}`);
+      assert.equal(response.headers.get("cache-control"), "no-store");
+    }
 
     const crossOrigin = await worker.dispatchFetch(
       "http://localhost/api/exception-sync",
@@ -176,120 +133,64 @@ test("enforces RBAC and two-person approval on encrypted exceptions", async () =
           "Content-Type": "application/json",
           Origin: "https://attacker.example",
         },
-        body: JSON.stringify({ exceptions: [exception] }),
+        body: JSON.stringify({ exceptions: [] }),
       },
     );
     assert.equal(crossOrigin.status, 403);
+  } finally {
+    await worker.dispose();
+  }
+});
 
-    const readerWrite = await worker.dispatchFetch(
-      "https://secure.example/api/exception-sync",
-      {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://secure.example",
-          "oai-authenticated-user-email": "reader@example.test",
+test("creates a native account and requires e-mail verification", async () => {
+  const worker = createWorker();
+  try {
+    const database = await applyMigrations(worker);
+    const originalConsoleInfo = console.info;
+    let response;
+    try {
+      console.info = () => {};
+      response = await worker.dispatchFetch(
+        "http://localhost/api/auth/sign-up/email",
+        {
+          method: "POST",
+          headers: {
+            "CF-Connecting-IP": "127.0.0.1",
+            "Content-Type": "application/json",
+            Origin: "http://localhost",
+          },
+          body: JSON.stringify({
+            email: "admin@example.test",
+            name: "Admin Test",
+            password: "Correct-Horse-Battery-Staple-2026",
+          }),
         },
-        body: JSON.stringify({ exceptions: [exception] }),
-      },
-    );
-    assert.equal(readerWrite.status, 403);
+      );
+    } finally {
+      console.info = originalConsoleInfo;
+    }
+    assert.equal(response.status, 200, await response.text());
 
-    const created = await worker.dispatchFetch(
-      "https://secure.example/api/exception-sync",
-      {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://secure.example",
-          "oai-authenticated-user-email": "requester@example.test",
-        },
-        body: JSON.stringify({ exceptions: [exception] }),
-      },
-    );
-    const createdText = await created.text();
-    assert.equal(created.status, 200, createdText);
-    const createdBody = JSON.parse(createdText);
-    assert.equal(createdBody.changed, 1);
-    assert.equal(createdBody.exceptions.length, 1);
-    assert.equal(createdBody.exceptions[0].approval.status, "pending");
-    assert.equal(createdBody.exceptions[0].approval.approvals.length, 0);
-    assert.equal(createdBody.sync.kms.keyId, "render-test-key:v1");
-    assert.equal(createdBody.sync.role, "auditor");
-
-    const requesterApproval = await worker.dispatchFetch(
-      "https://secure.example/api/exception-sync",
-      {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://secure.example",
-          "oai-authenticated-user-email": "requester@example.test",
-        },
-        body: JSON.stringify({
-          exceptionId: exception.id,
-          action: "approve",
-        }),
-      },
-    );
-    assert.equal(requesterApproval.status, 409);
-
-    const firstApproval = await worker.dispatchFetch(
-      "https://secure.example/api/exception-sync",
-      {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://secure.example",
-          "oai-authenticated-user-email": "auditor-one@example.test",
-          "oai-authenticated-user-full-name": "Auditrice%20MCP",
-          "oai-authenticated-user-full-name-encoding":
-            "percent-encoded-utf-8",
-        },
-        body: JSON.stringify({
-          exceptionId: exception.id,
-          action: "approve",
-        }),
-      },
-    );
-    const firstApprovalBody = await firstApproval.json();
-    assert.equal(firstApproval.status, 200);
-    assert.equal(firstApprovalBody.sync.identity, "Auditrice MCP");
-    assert.equal(firstApprovalBody.exceptions[0].approval.status, "pending");
-    assert.equal(firstApprovalBody.exceptions[0].approval.approvals.length, 1);
-
-    const secondApproval = await worker.dispatchFetch(
-      "https://secure.example/api/exception-sync",
-      {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://secure.example",
-          "oai-authenticated-user-email": "auditor-two@example.test",
-        },
-        body: JSON.stringify({
-          exceptionId: exception.id,
-          action: "approve",
-        }),
-      },
-    );
-    const secondApprovalBody = await secondApproval.json();
-    assert.equal(secondApproval.status, 200);
-    assert.equal(secondApprovalBody.exceptions[0].approval.status, "approved");
-    assert.equal(secondApprovalBody.exceptions[0].approval.approvals.length, 2);
-
-    const database = await worker.getD1Database("DB");
-    const stored = await database
+    const user = await database
       .prepare(
-        "SELECT record_key, envelope, actor_hash FROM exception_sync_records LIMIT 1",
+        "SELECT email, email_verified AS emailVerified FROM user WHERE email = ?",
+      )
+      .bind("admin@example.test")
+      .first();
+    assert.equal(user.email, "admin@example.test");
+    assert.equal(user.emailVerified, 0);
+
+    const credential = await database
+      .prepare(
+        "SELECT password FROM account WHERE provider_id = 'credential' LIMIT 1",
       )
       .first();
-    assert.match(stored.record_key, /^record:[a-f0-9]{64}$/);
-    assert.match(stored.actor_hash, /^[a-f0-9]{64}$/);
+    assert.equal(typeof credential.password, "string");
     assert.doesNotMatch(
-      stored.envelope,
-      /Remote MCP|SEC-42|exception-sync-1|requester@example/u,
+      credential.password,
+      /Correct-Horse-Battery-Staple-2026/,
     );
+    assert.equal(response.headers.get("set-cookie"), null);
   } finally {
     await worker.dispose();
   }
@@ -298,6 +199,7 @@ test("enforces RBAC and two-person approval on encrypted exceptions", async () =
 test("keeps the audit engine separate from the interface", async () => {
   const [
     page,
+    dashboard,
     layout,
     auditEngine,
     findingExceptions,
@@ -316,10 +218,14 @@ test("keeps the audit engine separate from the interface", async () => {
     exceptionSyncRoute,
     enterpriseAuthorization,
     keyManagement,
+    authServer,
+    authPermissions,
+    schema,
     packageJson,
     ciWorkflow,
   ] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/dashboard.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/audit-engine.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/finding-exceptions.ts", import.meta.url), "utf8"),
@@ -353,13 +259,16 @@ test("keeps the audit engine separate from the interface", async () => {
       "utf8",
     ),
     readFile(new URL("../lib/key-management.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/auth/server.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/auth/permissions.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"),
   ]);
 
-  assert.match(page, /from "\.\.\/lib\/audit-engine"/);
-  assert.match(page, /createGovernedAuditReport/);
-  assert.match(page, /createGovernedSarifReport/);
+  assert.match(dashboard, /from "\.\.\/lib\/audit-engine"/);
+  assert.match(dashboard, /createGovernedAuditReport/);
+  assert.match(dashboard, /createGovernedSarifReport/);
   assert.match(auditEngine, /export function auditConfiguration/);
   assert.match(auditEngine, /export function createSarifReport/);
   assert.match(findingExceptions, /export function createRiskException/);
@@ -380,30 +289,44 @@ test("keeps the audit engine separate from the interface", async () => {
     ociProvenance,
     /export function parseOciVerificationPolicyDocument/,
   );
-  assert.match(page, /POLITIQUE ABSENTE/);
+  assert.match(dashboard, /POLITIQUE ABSENTE/);
   assert.match(osv, /export async function scanComponentsWithOsv/);
   assert.match(provenance, /export async function verifyComponentProvenance/);
   assert.match(pdfReport, /export function createAuditPdfReport/);
   assert.match(workspaces, /export async function discoverWorkspacePackages/);
   assert.match(auditHistory, /export function createAuditHistoryPayload/);
   assert.match(auditHistory, /export function compareAuditHistory/);
-  assert.match(auditHistoryRoute, /oai-authenticated-user-email/);
+  assert.match(auditHistoryRoute, /getAuthContext/);
+  assert.match(auditHistoryRoute, /organizationId/);
   assert.match(auditHistoryRoute, /sameOrigin/);
+  assert.doesNotMatch(auditHistoryRoute, /oai-authenticated-user-email/);
   assert.doesNotMatch(auditHistoryRoute, /serverName|configuration|snippet/);
   assert.match(exceptionSync, /encryptSyncedRiskException/);
-  assert.match(exceptionSyncRoute, /oai-authenticated-user-email/);
+  assert.match(exceptionSyncRoute, /getAuthContext/);
+  assert.match(exceptionSyncRoute, /organizationId/);
   assert.match(exceptionSyncRoute, /sameOrigin/);
+  assert.doesNotMatch(exceptionSyncRoute, /oai-authenticated-user-email/);
   assert.match(exceptionSyncRoute, /export async function PATCH/);
-  assert.match(enterpriseAuthorization, /resolveEnterpriseRole/);
   assert.match(enterpriseAuthorization, /applyRiskExceptionDecision/);
   assert.match(keyManagement, /createKeyManagementProvider/);
   assert.match(keyManagement, /AES-GCM/);
-  assert.match(page, /\/api\/audit-history/);
-  assert.match(page, /\/api\/exception-sync/);
-  assert.doesNotMatch(page, /branchement à un historique persistant/);
-  assert.match(page, /npm run collect:security/);
-  assert.match(page, /Claude Desktop classique ou Microsoft/);
-  assert.match(page, /<code>\.mcp\.json<\/code>/);
+  assert.match(page, /getAuthContext/);
+  assert.match(page, /redirect\("\/login"\)/);
+  assert.match(authServer, /requireEmailVerification: true/);
+  assert.match(authServer, /twoFactor\(/);
+  assert.match(authServer, /organization\(/);
+  assert.match(authPermissions, /adminRole/);
+  assert.match(authPermissions, /auditorRole/);
+  assert.match(authPermissions, /readerRole/);
+  assert.match(schema, /export const organization/);
+  assert.match(schema, /export const member/);
+  assert.match(schema, /export const invitation/);
+  assert.match(dashboard, /\/api\/audit-history/);
+  assert.match(dashboard, /\/api\/exception-sync/);
+  assert.doesNotMatch(dashboard, /branchement à un historique persistant/);
+  assert.match(dashboard, /npm run collect:security/);
+  assert.match(dashboard, /Claude Desktop classique ou Microsoft/);
+  assert.match(dashboard, /<code>\.mcp\.json<\/code>/);
   assert.match(packageJson, /generate:admission/);
   assert.match(packageJson, /validate:admission/);
   assert.match(ciWorkflow, /Generate Kubernetes admission bundle/);

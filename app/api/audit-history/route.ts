@@ -8,10 +8,10 @@ import {
   type AuditHistoryPayload,
   type AuditHistoryRecord,
 } from "../../../lib/audit-history";
+import { getAuthContext } from "../../../lib/auth/server";
 
 export const dynamic = "force-dynamic";
 
-const AUTHENTICATED_EMAIL_HEADER = "oai-authenticated-user-email";
 const MAX_REQUEST_BYTES = 16_384;
 
 function responseJson(body: unknown, status = 200): Response {
@@ -21,30 +21,6 @@ function responseJson(body: unknown, status = 200): Response {
       "Cache-Control": "no-store",
     },
   });
-}
-
-function isLocalRequest(request: Request): boolean {
-  return ["localhost", "127.0.0.1", "::1"].includes(
-    new URL(request.url).hostname,
-  );
-}
-
-async function actorHash(request: Request): Promise<string | null> {
-  const email = request.headers
-    .get(AUTHENTICATED_EMAIL_HEADER)
-    ?.trim()
-    .toLowerCase();
-  const identity = email || (isLocalRequest(request) ? "local-preview" : "");
-  if (!identity) return null;
-
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    // Keep the original namespace so existing per-user history remains readable.
-    new TextEncoder().encode(`mcp-sentinel:audit-history:${identity}`),
-  );
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
 }
 
 function sameOrigin(request: Request): boolean {
@@ -98,14 +74,14 @@ async function readPayload(request: Request): Promise<AuditHistoryPayload> {
 
 export async function GET(request: Request) {
   try {
-    const owner = await actorHash(request);
-    if (!owner) return responseJson({ error: "Authentification requise." }, 401);
+    const actor = await getAuthContext(request.headers);
+    if (!actor) return responseJson({ error: "Authentification requise." }, 401);
 
     await ensureAuditHistorySchema();
     const rows = await getDb()
       .select()
       .from(auditHistory)
-      .where(eq(auditHistory.actorHash, owner))
+      .where(eq(auditHistory.organizationId, actor.organizationId))
       .orderBy(desc(auditHistory.createdAt))
       .limit(AUDIT_HISTORY_LIMIT);
 
@@ -123,8 +99,14 @@ export async function POST(request: Request) {
     if (!sameOrigin(request)) {
       return responseJson({ error: "Origine de requête refusée." }, 403);
     }
-    const owner = await actorHash(request);
-    if (!owner) return responseJson({ error: "Authentification requise." }, 401);
+    const actor = await getAuthContext(request.headers);
+    if (!actor) return responseJson({ error: "Authentification requise." }, 401);
+    if (actor.role === "reader") {
+      return responseJson(
+        { error: "Le rôle Reader ne peut pas enregistrer un audit." },
+        403,
+      );
+    }
 
     const payload = await readPayload(request);
     const id = crypto.randomUUID();
@@ -133,7 +115,8 @@ export async function POST(request: Request) {
     const db = getDb();
     await db.insert(auditHistory).values({
       id,
-      actorHash: owner,
+      organizationId: actor.organizationId,
+      actorHash: actor.actorHash,
       createdAt,
       source: payload.source,
       score: payload.score,
@@ -149,7 +132,7 @@ export async function POST(request: Request) {
     const stale = await db
       .select({ id: auditHistory.id })
       .from(auditHistory)
-      .where(eq(auditHistory.actorHash, owner))
+      .where(eq(auditHistory.organizationId, actor.organizationId))
       .orderBy(desc(auditHistory.createdAt))
       .limit(500)
       .offset(AUDIT_HISTORY_LIMIT);
@@ -158,7 +141,7 @@ export async function POST(request: Request) {
         .delete(auditHistory)
         .where(
           and(
-            eq(auditHistory.actorHash, owner),
+            eq(auditHistory.organizationId, actor.organizationId),
             inArray(
               auditHistory.id,
               stale.map((entry) => entry.id),
@@ -197,13 +180,19 @@ export async function DELETE(request: Request) {
     if (!sameOrigin(request)) {
       return responseJson({ error: "Origine de requête refusée." }, 403);
     }
-    const owner = await actorHash(request);
-    if (!owner) return responseJson({ error: "Authentification requise." }, 401);
+    const actor = await getAuthContext(request.headers);
+    if (!actor) return responseJson({ error: "Authentification requise." }, 401);
+    if (actor.role !== "admin") {
+      return responseJson(
+        { error: "Seul un administrateur peut effacer l’historique." },
+        403,
+      );
+    }
 
     await ensureAuditHistorySchema();
     await getDb()
       .delete(auditHistory)
-      .where(eq(auditHistory.actorHash, owner));
+      .where(eq(auditHistory.organizationId, actor.organizationId));
     return responseJson({ deleted: true });
   } catch {
     return responseJson(

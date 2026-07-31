@@ -117,7 +117,7 @@ export function createPlatformSecretKeyProvider(
     status: () => ({
       provider: "platform-secret",
       keyId: normalizedKeyId,
-      label: "Clé d’enveloppe gérée par Sites",
+      label: "Clé d’enveloppe gérée par l’hébergeur",
     }),
     async wrapKey(dataKey, context) {
       if (dataKey.length !== 32) {

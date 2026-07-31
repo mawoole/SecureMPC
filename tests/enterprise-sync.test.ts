@@ -121,7 +121,7 @@ test("requires a complete KMS configuration and rejects clear-text endpoints", (
       TRUSTMAP_KMS_MASTER_KEY: masterKey,
       TRUSTMAP_KMS_KEY_ID: "sites-key:v1",
     }).status().label,
-    "Clé d’enveloppe gérée par Sites",
+    "Clé d’enveloppe gérée par l’hébergeur",
   );
 });
 

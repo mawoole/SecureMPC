@@ -31,7 +31,6 @@ export class EnterpriseAuthorizationError extends Error {
   }
 }
 
-const ROLE_VALUES = new Set<EnterpriseRole>(["reader", "auditor", "admin"]);
 const SEVERITY_RANK: Record<Severity, number> = {
   medium: 1,
   high: 2,
@@ -64,32 +63,6 @@ export function roleCapabilities(
     canReject: role === "admin",
     canRevoke: role !== "reader",
   };
-}
-
-export function resolveEnterpriseRole(
-  email: string | null,
-  runtime: Record<string, unknown>,
-  localPreview = false,
-): EnterpriseRole {
-  if (localPreview) return "admin";
-  if (!email) return "reader";
-  const configured = runtime.TRUSTMAP_ROLE_BINDINGS;
-  if (typeof configured !== "string" || configured.length > 50_000) {
-    return "reader";
-  }
-  try {
-    const parsed: unknown = JSON.parse(configured);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return "reader";
-    }
-    const value = (parsed as Record<string, unknown>)[email.toLowerCase()];
-    return typeof value === "string" &&
-      ROLE_VALUES.has(value as EnterpriseRole)
-      ? (value as EnterpriseRole)
-      : "reader";
-  } catch {
-    return "reader";
-  }
 }
 
 export function authoritativeSeverity(
