@@ -1335,7 +1335,7 @@ export function createSarifReport(
           driver: {
             name: "MCP TrustMap",
             version: "1.0.0",
-            informationUri: "https://github.com/mawoole/SecureMPC",
+            informationUri: "https://github.com/mawoole/MCPTrustMap",
             rules: [...usedRules.values()].map((rule) => ({
               id: rule.code,
               name: rule.title,
