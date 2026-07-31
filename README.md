@@ -20,11 +20,12 @@ directement applicables.
   commande ainsi qu’un workflow GitHub Actions multi-environnements, avec
   chemins, seuils, SARIF, CycloneDX, OSV et provenance configurables par profil.
 - **TrustMap Enterprise** mesure la couverture des propriétaires et des preuves,
-  présente la posture par équipe et exporte un pack de gouvernance JSON.
+  présente la posture par équipe, synchronise le registre chiffré avec SSO,
+  applique les rôles et pilote les approbations critiques.
 
 Les vues Enterprise reflètent uniquement les données réellement chargées.
-L’interface ne simule pas de SSO, de synchronisation multi-utilisateurs ni de
-connexion à un annuaire d’entreprise.
+L’identité SSO et la politique d’accès sont fournies par le site privé ; les
+autorisations sont recalculées côté serveur à chaque requête.
 
 > Le moteur actuel réalise une **analyse statique locale** des configurations.
 > Il ne remplace pas un test d’intrusion, une revue des permissions réellement
@@ -79,7 +80,8 @@ par un collecteur local explicite :
 - aucune configuration importée n’est envoyée à un service distant ;
 - les valeurs sensibles détectées ne sont jamais affichées ;
 - aucun secret n’est enregistré dans le stockage du navigateur ;
-- le registre d’exceptions reste sur l’appareil dans le stockage du navigateur ;
+- une copie locale du registre d’exceptions reste dans le navigateur et le
+  registre partagé stocke uniquement des enveloppes chiffrées dans D1 ;
 - l’historique distant conserve uniquement des compteurs agrégés par règle,
   associés à un identifiant utilisateur pseudonymisé ;
 - aucun nom de serveur, chemin, configuration, extrait de correction ou secret
@@ -154,14 +156,18 @@ sous exception depuis le détail de l’écart. MCP TrustMap exige :
 - un responsable identifié ;
 - une date d’expiration future, limitée à 366 jours.
 
+Une exception **critique** reste en attente et ne masque jamais le constat avant
+deux approbations attribuées à deux auditeurs distincts du demandeur. Une même
+identité ne peut pas voter deux fois ; le demandeur ne peut pas s’auto-approuver
+et seul un administrateur peut rejeter la demande.
+
 Une exception active retire temporairement l’écart des remédiations prioritaires
 mais ne réduit pas le score brut : le risque reste visible. À l’échéance ou après
 révocation, l’écart redevient automatiquement prioritaire.
 
-Le registre est conservé uniquement dans le navigateur courant. Le rapport JSON
-1.1 inclut les exceptions actives, expirées et révoquées. L’export SARIF conserve
-le résultat et ajoute une suppression `external/accepted` documentée pour les
-seules exceptions actives.
+Le rapport JSON 1.1 inclut les exceptions actives, en attente, rejetées,
+expirées et révoquées. L’export SARIF conserve le résultat et ajoute une
+suppression `external/accepted` documentée pour les seules exceptions actives.
 
 ## Historique des audits
 
@@ -589,6 +595,7 @@ lib/
   finding-exceptions.ts Registre local et exports des risques acceptés
   trustmap-governance.ts Signature des politiques et bundles d’exceptions chiffrés
   enterprise-sync.ts Chiffrement par clé de données et pseudonymisation
+  enterprise-authorization.ts Rôles et double approbation côté serveur
   key-management.ts Enveloppe de clés Sites ou passerelle KMS HTTPS
   collector.ts     Découverte, redaction et probe MCP passif
   lockfiles.ts     Graphes package-lock, pnpm, Yarn, uv et Poetry
@@ -607,6 +614,7 @@ tools/
   collector.ts     Interface en ligne de commande multiplateforme
 tests/
   audit-engine.test.ts     Tests de sécurité du moteur
+  enterprise-authorization.test.ts Tests des rôles et approbations critiques
   finding-exceptions.test.ts Tests d’expiration, révocation et exports
   collector.test.ts        Tests du collecteur et du protocole passif
   kubernetes-admission.test.ts Tests YAML, identités et préfixes Kubernetes
@@ -779,6 +787,24 @@ synchronisation :
 - conserve les 500 événements d’écriture les plus récents sans nom de serveur,
   règle, motif ou autre contenu métier en clair.
 
+### Rôles Enterprise et approbation critique
+
+`TRUSTMAP_ROLE_BINDINGS` est un secret JSON qui associe les adresses SSO aux
+rôles. Toute identité absente de cette table reçoit le rôle `reader`.
+
+| Rôle | Lire | Synchroniser/révoquer | Approuver | Rejeter |
+| --- | --- | --- | --- | --- |
+| `reader` | oui | non | non | non |
+| `auditor` | oui | oui | oui | non |
+| `admin` | oui | oui | oui | oui |
+
+Pour une nouvelle exception critique, l’API ignore tout état d’approbation
+fourni par le navigateur, recalcule une sévérité minimale selon la règle et
+crée une demande liée à l’empreinte pseudonymisée du demandeur. Deux appels
+`PATCH /api/exception-sync` effectués par des auditeurs différents sont requis.
+Les contrôles sont appliqués côté serveur ; les boutons désactivés de
+l’interface ne constituent qu’un retour utilisateur.
+
 Chaque exception est chiffrée avec une clé de données AES-256-GCM indépendante.
 La clé de données est ensuite enveloppée par le fournisseur de clés configuré.
 D1 ne reçoit que l’enveloppe, une clé d’enregistrement pseudonymisée, la version,
@@ -825,7 +851,10 @@ aucune valeur secrète.
 - l’historique est limité à 60 synthèses agrégées et ne permet pas de rouvrir
   l’inventaire complet d’un audit précédent ;
 - la politique d’accès Sites définit les membres de l’espace ; l’application ne
-  fournit pas encore d’interface d’invitation ou de gestion des rôles ;
+  fournit pas encore d’interface d’invitation et les rôles sont configurés par
+  le secret `TRUSTMAP_ROLE_BINDINGS` ;
+- un espace privé limité à une seule identité ne peut pas achever une double
+  approbation : deux auditeurs distincts du demandeur doivent être autorisés ;
 - la passerelle KMS externe suit le contrat HTTPS MCP TrustMap et nécessite un
   adaptateur devant AWS KMS, Azure Key Vault, Google Cloud KMS ou un HSM ;
 - l’empreinte d’une identité de signature doit être validée par un canal
@@ -835,8 +864,7 @@ aucune valeur secrète.
 
 ## Prochaines étapes possibles
 
-- rôles distincts lecteur, auditeur et administrateur avec approbation à deux
-  personnes pour les exceptions critiques ;
+- interface d’administration des membres et rôles reliée à un annuaire ;
 - adaptateurs KMS natifs et migration automatique lors de la rotation ;
 - clés de signature matérielles WebAuthn ou gérées par un HSM d’entreprise.
 

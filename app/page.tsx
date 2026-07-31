@@ -17,6 +17,7 @@ import {
   type ServerStatus,
   type Severity,
 } from "../lib/audit-engine";
+import type { ExceptionDecision } from "../lib/enterprise-authorization";
 import {
   createGovernedAuditReport,
   createGovernedSarifReport,
@@ -506,6 +507,9 @@ export default function Home() {
             identity?: string;
             workspaceRef?: string;
             kms?: { label?: string; keyId?: string };
+            role?: SharedExceptionSyncState["role"];
+            capabilities?: SharedExceptionSyncState["capabilities"];
+            localPreview?: boolean;
           };
         };
         if (!response.ok) {
@@ -528,14 +532,19 @@ export default function Home() {
         });
         setSharedExceptionSync({
           phase: "synced",
-          message: "Session SSO vérifiée. Le registre local est à jour.",
+          message: body.sync?.capabilities?.canSync
+            ? "Session SSO vérifiée. Le registre local est à jour."
+            : "Session SSO vérifiée. Accès au registre en lecture seule.",
           identity: body.sync?.identity,
           workspaceRef: body.sync?.workspaceRef,
           kmsLabel: body.sync?.kms?.label,
           kmsKeyId: body.sync?.kms?.keyId,
           lastSyncedAt: body.lastSyncedAt,
+          role: body.sync?.role,
+          capabilities: body.sync?.capabilities,
+          localPreview: body.sync?.localPreview,
         });
-        setExceptionSyncReady(true);
+        setExceptionSyncReady(body.sync?.capabilities?.canSync === true);
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
           return;
@@ -582,6 +591,9 @@ export default function Home() {
               identity?: string;
               workspaceRef?: string;
               kms?: { label?: string; keyId?: string };
+              role?: SharedExceptionSyncState["role"];
+              capabilities?: SharedExceptionSyncState["capabilities"];
+              localPreview?: boolean;
             };
           };
           if (!response.ok) {
@@ -610,6 +622,9 @@ export default function Home() {
             kmsLabel: body.sync?.kms?.label,
             kmsKeyId: body.sync?.kms?.keyId,
             lastSyncedAt: body.lastSyncedAt ?? new Date().toISOString(),
+            role: body.sync?.role,
+            capabilities: body.sync?.capabilities,
+            localPreview: body.sync?.localPreview,
           });
         } catch (error) {
           if (error instanceof DOMException && error.name === "AbortError") {
@@ -701,6 +716,8 @@ export default function Home() {
         ),
     [riskExceptions],
   );
+  const canManageRiskExceptions =
+    sharedExceptionSync.capabilities?.canSync !== false;
 
   const filteredServers = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
@@ -897,6 +914,12 @@ export default function Home() {
   const saveRiskException = (server: McpServer, finding: Finding) => {
     if (!exceptionDraft) return;
     setExceptionError("");
+    if (!canManageRiskExceptions) {
+      setExceptionError(
+        "Votre rôle lecteur ne permet pas de créer une exception.",
+      );
+      return;
+    }
 
     if (findActiveRiskException(server, finding, riskExceptions)) {
       setExceptionError("Une exception active existe déjà pour cet écart.");
@@ -918,7 +941,9 @@ export default function Home() {
       setRiskExceptions((current) => [...current, created]);
       setExceptionDraft(null);
       setToast(
-        `Exception documentée jusqu’au ${formatExceptionDate(created.expiresAt)}`,
+        finding.severity === "critical"
+          ? "Exception critique enregistrée — deux approbations distinctes sont requises"
+          : `Exception documentée jusqu’au ${formatExceptionDate(created.expiresAt)}`,
       );
       window.setTimeout(() => setToast(""), 3000);
     } catch (error) {
@@ -931,6 +956,11 @@ export default function Home() {
   };
 
   const revokeException = (exceptionId: string) => {
+    if (sharedExceptionSync.capabilities?.canRevoke === false) {
+      setToast("Votre rôle ne permet pas de révoquer une exception");
+      window.setTimeout(() => setToast(""), 3000);
+      return;
+    }
     setRiskExceptions((current) =>
       current.map((exception) =>
         exception.id === exceptionId
@@ -941,6 +971,67 @@ export default function Home() {
     setExceptionDraft(null);
     setExceptionError("");
     setToast("Exception révoquée — l’écart redevient prioritaire");
+    window.setTimeout(() => setToast(""), 3000);
+  };
+
+  const decideRiskException = async (
+    exceptionId: string,
+    action: ExceptionDecision,
+  ) => {
+    const response = await fetch("/api/exception-sync", {
+      method: "PATCH",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ exceptionId, action }),
+    });
+    const body = (await response.json()) as {
+      error?: string;
+      exceptions?: unknown;
+      lastSyncedAt?: string | null;
+      sync?: {
+        identity?: string;
+        workspaceRef?: string;
+        kms?: { label?: string; keyId?: string };
+        role?: SharedExceptionSyncState["role"];
+        capabilities?: SharedExceptionSyncState["capabilities"];
+        localPreview?: boolean;
+      };
+    };
+    if (!response.ok) {
+      const message =
+        body.error || "La décision d’approbation n’a pas pu être enregistrée.";
+      setToast(message);
+      window.setTimeout(() => setToast(""), 4000);
+      throw new Error(message);
+    }
+    const candidates = Array.isArray(body.exceptions) ? body.exceptions : [];
+    const remote = parseRiskExceptions(JSON.stringify(candidates));
+    if (remote.length !== candidates.length) {
+      throw new Error("Le registre partagé reçu est invalide.");
+    }
+    setRiskExceptions((current) => mergeRiskExceptions(current, remote));
+    setSharedExceptionSync({
+      phase: "synced",
+      message:
+        action === "approve"
+          ? "Approbation attribuée et enregistrée côté serveur."
+          : "Exception critique rejetée côté serveur.",
+      identity: body.sync?.identity,
+      workspaceRef: body.sync?.workspaceRef,
+      kmsLabel: body.sync?.kms?.label,
+      kmsKeyId: body.sync?.kms?.keyId,
+      lastSyncedAt: body.lastSyncedAt ?? new Date().toISOString(),
+      role: body.sync?.role,
+      capabilities: body.sync?.capabilities,
+      localPreview: body.sync?.localPreview,
+    });
+    setToast(
+      action === "approve"
+        ? "Approbation enregistrée"
+        : "Exception critique rejetée",
+    );
     window.setTimeout(() => setToast(""), 3000);
   };
 
@@ -1444,6 +1535,10 @@ export default function Home() {
                       <span className={`exception-status ${status}`}>
                         {status === "active"
                           ? "Active"
+                          : status === "pending"
+                            ? "À approuver"
+                            : status === "rejected"
+                              ? "Rejetée"
                           : status === "expired"
                             ? "Expirée"
                             : "Révoquée"}
@@ -1459,7 +1554,8 @@ export default function Home() {
                           {formatExceptionDate(exception.expiresAt)}
                         </small>
                       </div>
-                      {status === "active" ? (
+                      {["active", "pending"].includes(status) &&
+                      canManageRiskExceptions ? (
                         <button
                           className="button secondary compact"
                           onClick={() => revokeException(exception.id)}
@@ -1502,6 +1598,7 @@ export default function Home() {
             onSyncNow={() => {
               setExceptionSyncRequest((current) => current + 1);
             }}
+            onExceptionDecision={decideRiskException}
           />
         )}
       </main>
@@ -2043,6 +2140,10 @@ export default function Home() {
                                 <span>
                                   {latestExceptionStatus === "active"
                                     ? "RISQUE ACCEPTÉ TEMPORAIREMENT"
+                                    : latestExceptionStatus === "pending"
+                                      ? "DOUBLE APPROBATION REQUISE"
+                                      : latestExceptionStatus === "rejected"
+                                        ? "EXCEPTION REJETÉE"
                                     : latestExceptionStatus === "expired"
                                       ? "EXCEPTION EXPIRÉE"
                                       : "EXCEPTION RÉVOQUÉE"}
@@ -2050,8 +2151,11 @@ export default function Home() {
                                 <strong>
                                   {latestExceptionStatus === "active"
                                     ? `jusqu’au ${formatExceptionDate(latestException.expiresAt)}`
+                                    : latestExceptionStatus === "pending"
+                                      ? `${latestException.approval?.approvals.length ?? 0}/${latestException.approval?.requiredApprovals ?? 2} approbations`
                                     : formatExceptionDate(
                                         latestException.revokedAt ??
+                                          latestException.approval?.rejectedAt ??
                                           latestException.expiresAt,
                                       )}
                                 </strong>
@@ -2061,7 +2165,9 @@ export default function Home() {
                                 Responsable : {latestException.owner} · créée le{" "}
                                 {formatExceptionDate(latestException.createdAt)}
                               </small>
-                              {latestExceptionStatus === "active" ? (
+                              {["active", "pending"].includes(
+                                latestExceptionStatus ?? "",
+                              ) && canManageRiskExceptions ? (
                                 <button
                                   className="exception-revoke"
                                   onClick={() =>
@@ -2073,7 +2179,9 @@ export default function Home() {
                               ) : null}
                             </section>
                           ) : null}
-                          {!activeException && !exceptionFormOpen ? (
+                          {!activeException &&
+                          !exceptionFormOpen &&
+                          canManageRiskExceptions ? (
                             <button
                               className="exception-trigger"
                               onClick={() =>
@@ -2170,8 +2278,10 @@ export default function Home() {
                                 </button>
                               </div>
                               <small>
-                                Stockage local à cet appareil. L’export JSON et
-                                SARIF conserve la justification et l’échéance.
+                                Les exceptions critiques restent ouvertes
+                                jusqu’à deux approbations distinctes côté
+                                serveur. L’export conserve la justification et
+                                l’échéance.
                               </small>
                             </section>
                           ) : null}

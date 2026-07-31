@@ -52,13 +52,37 @@ function exception() {
   );
 }
 
+function approvedException() {
+  return {
+    ...exception(),
+    approval: {
+      status: "approved" as const,
+      requiredApprovals: 2 as const,
+      requestedBy: "1".repeat(64),
+      requestedAt: now.toISOString(),
+      approvals: [
+        {
+          actorRef: "2".repeat(64),
+          approvedAt: "2026-07-30T11:00:00.000Z",
+        },
+        {
+          actorRef: "3".repeat(64),
+          approvedAt: "2026-07-30T12:00:00.000Z",
+        },
+      ],
+    },
+  };
+}
+
 test("creates a documented, bounded and dated risk exception", () => {
   const created = exception();
 
   assert.equal(created.serverId, server.id);
   assert.equal(created.rule, finding.rule);
+  assert.equal(created.severity, "critical");
   assert.equal(created.createdAt, now.toISOString());
-  assert.equal(riskExceptionStatus(created, now), "active");
+  assert.equal(riskExceptionStatus(created, now), "pending");
+  assert.equal(findActiveRiskException(server, finding, [created], now), undefined);
   assert.throws(
     () =>
       createRiskException(
@@ -77,7 +101,7 @@ test("creates a documented, bounded and dated risk exception", () => {
 });
 
 test("automatically reopens expired or revoked findings", () => {
-  const created = exception();
+  const created = approvedException();
   assert.equal(findActiveRiskException(server, finding, [created], now), created);
   assert.equal(openFindingEntries([server], [created], now).length, 0);
 
@@ -108,7 +132,7 @@ test("ignores malformed exception data loaded from browser storage", () => {
 });
 
 test("exports accepted risk in JSON and SARIF without hiding the finding", () => {
-  const created = exception();
+  const created = approvedException();
   const report = createGovernedAuditReport([server], [created], now);
   const sarif = createGovernedSarifReport([server], [created], now);
   const exportedFinding = report.servers[0].findings[0];

@@ -3,9 +3,28 @@ import {
   createSarifReport,
   type Finding,
   type McpServer,
+  type Severity,
 } from "./audit-engine.ts";
 
-export type RiskExceptionStatus = "active" | "expired" | "revoked";
+export type RiskExceptionStatus =
+  | "active"
+  | "pending"
+  | "rejected"
+  | "expired"
+  | "revoked";
+
+export type RiskExceptionApproval = {
+  status: "pending" | "approved" | "rejected";
+  requiredApprovals: 2;
+  requestedBy: string;
+  requestedAt: string;
+  approvals: {
+    actorRef: string;
+    approvedAt: string;
+  }[];
+  rejectedBy?: string;
+  rejectedAt?: string;
+};
 
 export type RiskException = {
   schemaVersion: "1.0";
@@ -20,6 +39,8 @@ export type RiskException = {
   createdAt: string;
   expiresAt: string;
   revokedAt?: string;
+  severity?: Severity;
+  approval?: RiskExceptionApproval;
 };
 
 export type RiskExceptionInput = {
@@ -33,6 +54,7 @@ export type RiskExceptionInput = {
 
 const MAX_EXCEPTION_DURATION_MS = 366 * 24 * 60 * 60 * 1_000;
 const MAX_STORED_EXCEPTIONS = 1_000;
+const ACTOR_REF_PATTERN = /^[a-f0-9]{64}$/;
 
 function isIsoDate(value: unknown): value is string {
   return (
@@ -76,7 +98,64 @@ function isStoredRiskException(value: unknown): value is RiskException {
     record.owner.length <= 80 &&
     isIsoDate(record.createdAt) &&
     isIsoDate(record.expiresAt) &&
-    (record.revokedAt === undefined || isIsoDate(record.revokedAt))
+    (record.revokedAt === undefined || isIsoDate(record.revokedAt)) &&
+    (record.severity === undefined ||
+      ["critical", "high", "medium"].includes(String(record.severity))) &&
+    (record.approval === undefined || isRiskExceptionApproval(record.approval))
+  );
+}
+
+function isRiskExceptionApproval(
+  value: unknown,
+): value is RiskExceptionApproval {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const approval = value as Record<string, unknown>;
+  if (
+    !["pending", "approved", "rejected"].includes(String(approval.status)) ||
+    approval.requiredApprovals !== 2 ||
+    typeof approval.requestedBy !== "string" ||
+    !ACTOR_REF_PATTERN.test(approval.requestedBy) ||
+    !isIsoDate(approval.requestedAt) ||
+    !Array.isArray(approval.approvals) ||
+    approval.approvals.length > 2
+  ) {
+    return false;
+  }
+  const approvers = new Set<string>();
+  for (const value of approval.approvals) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return false;
+    }
+    const entry = value as Record<string, unknown>;
+    if (
+      typeof entry.actorRef !== "string" ||
+      !ACTOR_REF_PATTERN.test(entry.actorRef) ||
+      !isIsoDate(entry.approvedAt) ||
+      approvers.has(entry.actorRef)
+    ) {
+      return false;
+    }
+    approvers.add(entry.actorRef);
+  }
+  if (
+    approval.status === "approved" &&
+    approval.approvals.length !== approval.requiredApprovals
+  ) {
+    return false;
+  }
+  if (
+    approval.status === "rejected" &&
+    (typeof approval.rejectedBy !== "string" ||
+      !ACTOR_REF_PATTERN.test(approval.rejectedBy) ||
+      !isIsoDate(approval.rejectedAt))
+  ) {
+    return false;
+  }
+  return (
+    approval.status === "rejected" ||
+    (approval.rejectedBy === undefined && approval.rejectedAt === undefined)
   );
 }
 
@@ -96,7 +175,15 @@ export function riskExceptionStatus(
   now = new Date(),
 ): RiskExceptionStatus {
   if (exception.revokedAt) return "revoked";
-  return Date.parse(exception.expiresAt) > now.getTime() ? "active" : "expired";
+  if (exception.approval?.status === "rejected") return "rejected";
+  if (Date.parse(exception.expiresAt) <= now.getTime()) return "expired";
+  if (
+    exception.approval?.status === "pending" ||
+    (exception.severity === "critical" && !exception.approval)
+  ) {
+    return "pending";
+  }
+  return "active";
 }
 
 export function createRiskException(
@@ -139,6 +226,7 @@ export function createRiskException(
     owner,
     createdAt: now.toISOString(),
     expiresAt: expiresAt.toISOString(),
+    severity: input.finding.severity,
   };
 }
 
@@ -146,7 +234,11 @@ export function revokeRiskException(
   exception: RiskException,
   revokedAt = new Date(),
 ): RiskException {
-  if (riskExceptionStatus(exception, revokedAt) !== "active") {
+  if (
+    ["revoked", "expired", "rejected"].includes(
+      riskExceptionStatus(exception, revokedAt),
+    )
+  ) {
     return exception;
   }
   return { ...exception, revokedAt: revokedAt.toISOString() };
@@ -161,7 +253,19 @@ export function parseRiskExceptions(serialized: string | null): RiskException[] 
     return parsed
       .filter(isStoredRiskException)
       .slice(0, MAX_STORED_EXCEPTIONS)
-      .map((exception) => ({ ...exception }));
+      .map((exception) =>
+        exception.approval
+          ? {
+              ...exception,
+              approval: {
+                ...exception.approval,
+                approvals: exception.approval.approvals.map((approval) => ({
+                  ...approval,
+                })),
+              },
+            }
+          : { ...exception },
+      );
   } catch {
     return [];
   }
@@ -277,6 +381,10 @@ export function createGovernedAuditReport(
       expiredExceptions: statuses.filter((status) => status === "expired")
         .length,
       revokedExceptions: statuses.filter((status) => status === "revoked")
+        .length,
+      pendingExceptions: statuses.filter((status) => status === "pending")
+        .length,
+      rejectedExceptions: statuses.filter((status) => status === "rejected")
         .length,
     },
     riskExceptions: exceptions

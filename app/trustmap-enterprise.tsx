@@ -2,7 +2,15 @@
 
 import { useMemo, useState } from "react";
 import type { McpServer } from "../lib/audit-engine";
-import type { RiskException } from "../lib/finding-exceptions";
+import type {
+  EnterpriseCapabilities,
+  EnterpriseRole,
+  ExceptionDecision,
+} from "../lib/enterprise-authorization";
+import {
+  riskExceptionStatus,
+  type RiskException,
+} from "../lib/finding-exceptions";
 import {
   createEnterprisePolicyPack,
   createEnterpriseSummary,
@@ -21,6 +29,15 @@ export type SharedExceptionSyncState = {
   kmsLabel?: string;
   kmsKeyId?: string;
   lastSyncedAt?: string | null;
+  role?: EnterpriseRole;
+  capabilities?: EnterpriseCapabilities;
+  localPreview?: boolean;
+};
+
+const roleLabel: Record<EnterpriseRole, string> = {
+  reader: "Lecteur",
+  auditor: "Auditeur",
+  admin: "Administrateur",
 };
 
 export function TrustMapEnterprise({
@@ -30,6 +47,7 @@ export function TrustMapEnterprise({
   onExceptionsImported,
   sharedSync,
   onSyncNow,
+  onExceptionDecision,
 }: {
   servers: McpServer[];
   exceptions: RiskException[];
@@ -37,6 +55,10 @@ export function TrustMapEnterprise({
   onExceptionsImported: (exceptions: RiskException[]) => void;
   sharedSync: SharedExceptionSyncState;
   onSyncNow: () => void;
+  onExceptionDecision: (
+    exceptionId: string,
+    decision: ExceptionDecision,
+  ) => Promise<void>;
 }) {
   const [passphrase, setPassphrase] = useState("");
   const [encryptedBundle, setEncryptedBundle] = useState("");
@@ -44,10 +66,31 @@ export function TrustMapEnterprise({
   const [syncMessage, setSyncMessage] = useState("");
   const [syncError, setSyncError] = useState("");
   const [syncBusy, setSyncBusy] = useState(false);
+  const [decisionBusy, setDecisionBusy] = useState("");
   const summary = useMemo(
     () => createEnterpriseSummary(servers, exceptions),
     [exceptions, servers],
   );
+  const pendingExceptions = useMemo(
+    () =>
+      exceptions.filter(
+        (exception) => riskExceptionStatus(exception) === "pending",
+      ),
+    [exceptions],
+  );
+  const canSync = sharedSync.capabilities?.canSync !== false;
+
+  const decideException = async (
+    exceptionId: string,
+    decision: ExceptionDecision,
+  ) => {
+    setDecisionBusy(`${exceptionId}:${decision}`);
+    try {
+      await onExceptionDecision(exceptionId, decision);
+    } finally {
+      setDecisionBusy("");
+    }
+  };
 
   const downloadJson = (filename: string, value: unknown) => {
     const url = URL.createObjectURL(
@@ -253,6 +296,15 @@ export function TrustMapEnterprise({
             </strong>
           </div>
           <div>
+            <span>Rôle effectif</span>
+            <strong>
+              {sharedSync.role
+                ? roleLabel[sharedSync.role]
+                : "En attente"}
+            </strong>
+            <small>Autorisation vérifiée côté serveur</small>
+          </div>
+          <div>
             <span>Gestion des clés</span>
             <strong>{sharedSync.kmsLabel || "Non configurée"}</strong>
             {sharedSync.kmsKeyId ? <small>{sharedSync.kmsKeyId}</small> : null}
@@ -275,13 +327,95 @@ export function TrustMapEnterprise({
             className="button secondary"
             disabled={
               sharedSync.phase === "connecting" ||
-              sharedSync.phase === "syncing"
+              sharedSync.phase === "syncing" ||
+              !canSync
             }
             onClick={onSyncNow}
           >
             Synchroniser maintenant
           </button>
         </div>
+      </article>
+      <article className="module-card approval-card">
+        <div className="module-card-head">
+          <div>
+            <span className="section-kicker">SÉPARATION DES TÂCHES</span>
+            <h3>Double approbation des exceptions critiques</h3>
+          </div>
+          <span className="count-badge">{pendingExceptions.length}</span>
+        </div>
+        <p className="crypto-intro">
+          Une exception critique ne réduit jamais le risque avant deux
+          validations provenant d’auditeurs distincts du demandeur. Le serveur
+          vérifie l’identité, le rôle et l’unicité de chaque décision.
+        </p>
+        {pendingExceptions.length ? (
+          <div className="approval-list">
+            {pendingExceptions.map((exception) => (
+              <div className="approval-row" key={exception.id}>
+                <div>
+                  <strong>
+                    {exception.serverName} · {exception.findingTitle}
+                  </strong>
+                  <p>{exception.reason}</p>
+                  <small>
+                    {exception.approval?.approvals.length ?? 0}/
+                    {exception.approval?.requiredApprovals ?? 2} approbations ·
+                    expire le{" "}
+                    {new Intl.DateTimeFormat("fr-FR", {
+                      dateStyle: "short",
+                    }).format(new Date(exception.expiresAt))}
+                  </small>
+                </div>
+                <div className="approval-actions">
+                  <button
+                    className="button primary compact"
+                    disabled={
+                      !sharedSync.capabilities?.canApprove ||
+                      Boolean(decisionBusy)
+                    }
+                    onClick={() =>
+                      void decideException(exception.id, "approve")
+                    }
+                  >
+                    {decisionBusy === `${exception.id}:approve`
+                      ? "Validation…"
+                      : "Approuver"}
+                  </button>
+                  {sharedSync.capabilities?.canReject ? (
+                    <button
+                      className="button secondary compact"
+                      disabled={Boolean(decisionBusy)}
+                      onClick={() =>
+                        void decideException(exception.id, "reject")
+                      }
+                    >
+                      {decisionBusy === `${exception.id}:reject`
+                        ? "Rejet…"
+                        : "Rejeter"}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="approval-empty">
+            <span aria-hidden="true">✓</span>
+            <div>
+              <strong>Aucune approbation critique en attente</strong>
+              <p>
+                Les exceptions non critiques restent gérées par les rôles
+                auditeur et administrateur.
+              </p>
+            </div>
+          </div>
+        )}
+        {!sharedSync.capabilities?.canApprove ? (
+          <p className="role-hint">
+            Votre rôle est en lecture seule pour les décisions d’approbation.
+          </p>
+        ) : null}
       </article>
       <article className="module-card exception-sync-card">
         <div className="module-card-head">
@@ -348,7 +482,7 @@ export function TrustMapEnterprise({
             </button>
             <button
               className="button primary"
-              disabled={syncBusy || !encryptedBundle}
+              disabled={syncBusy || !encryptedBundle || !canSync}
               onClick={importEncryptedExceptions}
             >
               Déchiffrer et fusionner
