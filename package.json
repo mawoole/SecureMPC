@@ -16,17 +16,22 @@
     "collect:security": "node --experimental-strip-types tools/collector.ts --probe --osv --provenance --sbom",
     "validate:admission": "node --experimental-strip-types tools/validate-admission.ts",
     "test": "npm run build && npm run test:unit && npm run test:rendered",
-    "test:unit": "node --experimental-strip-types --test tests/audit-engine.test.ts tests/audit-history.test.ts tests/ci-gate.test.ts tests/collector.test.ts tests/enterprise-authorization.test.ts tests/enterprise-sync.test.ts tests/finding-exceptions.test.ts tests/kubernetes-admission.test.ts tests/kubernetes-admission-validation.test.ts tests/lockfiles.test.ts tests/oci-provenance.test.ts tests/osv.test.ts tests/pdf-report.test.ts tests/provenance.test.ts tests/supply-chain.test.ts tests/trustmap-governance.test.ts tests/trustmap-modules.test.ts tests/workspaces.test.ts",
+    "test:unit": "node --experimental-strip-types --test tests/audit-engine.test.ts tests/audit-history.test.ts tests/ci-gate.test.ts tests/collector.test.ts tests/enterprise-authorization.test.ts tests/enterprise-sync.test.ts tests/finding-exceptions.test.ts tests/kubernetes-admission.test.ts tests/kubernetes-admission-validation.test.ts tests/lockfiles.test.ts tests/oci-provenance.test.ts tests/osv.test.ts tests/pdf-report.test.ts tests/provenance.test.ts tests/standalone-auth.test.ts tests/supply-chain.test.ts tests/trustmap-governance.test.ts tests/trustmap-modules.test.ts tests/workspaces.test.ts",
     "test:rendered": "node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .vite",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local --config wrangler.local.jsonc",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote --config wrangler.local.jsonc",
+    "deploy:standalone": "npm run build && wrangler deploy --config wrangler.local.jsonc"
   },
   "dependencies": {
+    "better-auth": "1.6.24",
     "drizzle-orm": "0.45.2",
     "jspdf": "4.2.1",
     "next": "16.2.12",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "react-qr-code": "2.0.18",
     "sigstore": "4.1.1",
     "smol-toml": "1.7.1",
     "yaml": "2.9.0"

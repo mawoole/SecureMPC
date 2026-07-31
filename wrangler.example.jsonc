@@ -1,0 +1,42 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mcp-trustmap",
+  "main": "dist/server/index.js",
+  "compatibility_date": "2026-07-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "no_bundle": true,
+  "base_dir": "dist/server",
+  "rules": [
+    {
+      "type": "ESModule",
+      "globs": ["**/*.js", "**/*.mjs"]
+    }
+  ],
+  "assets": {
+    "directory": "dist/client"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "BETTER_AUTH_URL": "https://app.votre-domaine.tld",
+    "TRUSTMAP_ENVIRONMENT": "production",
+    "TRUSTMAP_EMAIL_FROM": "MCP TrustMap <security@votre-domaine.tld>",
+    "TRUSTMAP_DEV_EMAIL_LOG": "false",
+    "TRUSTMAP_KMS_KEY_ID": "cloudflare-secret:v1"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mcp-trustmap-production",
+      "database_id": "00000000-0000-4000-8000-000000000000",
+      "migrations_dir": "drizzle"
+    }
+  ],
+  "routes": [
+    {
+      "pattern": "app.votre-domaine.tld",
+      "custom_domain": true
+    }
+  ]
+}

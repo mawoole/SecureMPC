@@ -5,7 +5,6 @@ import {
   applyRiskExceptionDecision,
   EnterpriseAuthorizationError,
   prepareRiskExceptionForSync,
-  resolveEnterpriseRole,
   roleCapabilities,
 } from "../lib/enterprise-authorization.ts";
 import {
@@ -57,26 +56,7 @@ function incomingException() {
   );
 }
 
-test("résout les rôles de façon fermée et rend l’aperçu local administrateur", () => {
-  const runtime = {
-    TRUSTMAP_ROLE_BINDINGS: JSON.stringify({
-      "admin@example.test": "admin",
-      "audit@example.test": "auditor",
-    }),
-  };
-  assert.equal(
-    resolveEnterpriseRole("admin@example.test", runtime, false),
-    "admin",
-  );
-  assert.equal(
-    resolveEnterpriseRole("audit@example.test", runtime, false),
-    "auditor",
-  );
-  assert.equal(
-    resolveEnterpriseRole("unknown@example.test", runtime, false),
-    "reader",
-  );
-  assert.equal(resolveEnterpriseRole(null, {}, true), "admin");
+test("applique les capacités des rôles de l’organisation", () => {
   assert.equal(roleCapabilities("reader").canSync, false);
   assert.equal(roleCapabilities("auditor").canReject, false);
   assert.equal(roleCapabilities("admin").canReject, true);

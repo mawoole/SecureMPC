@@ -20,12 +20,14 @@ directement applicables.
   commande ainsi qu’un workflow GitHub Actions multi-environnements, avec
   chemins, seuils, SARIF, CycloneDX, OSV et provenance configurables par profil.
 - **TrustMap Enterprise** mesure la couverture des propriétaires et des preuves,
-  présente la posture par équipe, synchronise le registre chiffré avec SSO,
-  applique les rôles et pilote les approbations critiques.
+  présente la posture par équipe, synchronise le registre chiffré par
+  organisation, applique les rôles et pilote les approbations critiques.
 
 Les vues Enterprise reflètent uniquement les données réellement chargées.
-L’identité SSO et la politique d’accès sont fournies par le site privé ; les
-autorisations sont recalculées côté serveur à chaque requête.
+MCP TrustMap fournit sa propre identité : inscription, vérification de l’adresse,
+connexion, récupération du mot de passe et MFA TOTP. Les autorisations et
+l’appartenance à l’organisation active sont recalculées côté serveur à chaque
+requête.
 
 > Le moteur actuel réalise une **analyse statique locale** des configurations.
 > Il ne remplace pas un test d’intrusion, une revue des permissions réellement
@@ -65,6 +67,10 @@ autorisations sont recalculées côté serveur à chaque requête.
 - score de sécurité global et par serveur ;
 - priorisation par criticité ;
 - remédiations expliquées avec extraits de configuration copiables ;
+- comptes autonomes avec vérification de l’adresse, récupération du mot de passe
+  et authentification multifacteur TOTP avec codes de secours ;
+- organisations clientes isolées et invitations par courriel ;
+- rôles `Admin`, `Auditor` et `Reader` appliqués côté serveur ;
 - historique persistant des scores et écarts, comparé audit par audit ;
 - export CSV chronologique de la posture et des écarts agrégés ;
 - exceptions de risque motivées, attribuées, datées et révocables ;
@@ -124,14 +130,29 @@ et renouvelez-la.
 
 ### Installation
 
-```bash
+```powershell
 git clone https://github.com/mawoole/MCPTrustMap.git
 cd MCPTrustMap
 npm ci
+Copy-Item .env.example .dev.vars
+npx wrangler d1 migrations apply DB --local --config wrangler.example.jsonc
 npm run dev
 ```
 
 Ouvrez ensuite [http://localhost:3000](http://localhost:3000).
+Le fichier `.dev.vars` est ignoré par Git. Pour recevoir réellement les
+courriels en local, renseignez `RESEND_API_KEY` et `TRUSTMAP_EMAIL_FROM`. Sans
+fournisseur d’e-mail, `TRUSTMAP_DEV_EMAIL_LOG=true` écrit les liens de
+vérification, d’invitation et de récupération dans la console locale.
+
+### Premier démarrage
+
+1. Créez un compte dans **Inscription** puis vérifiez son adresse.
+2. Créez l’organisation du premier client ; son créateur devient `Admin`.
+3. Ouvrez **Paramètres** pour inviter les autres membres et leur attribuer
+   `Admin`, `Auditor` ou `Reader`.
+4. Activez le MFA dans **Paramètres → Sécurité du compte**, scannez le QR code et
+   conservez les codes de secours hors ligne.
 
 ### Vérification de production
 
@@ -576,27 +597,34 @@ exploitable.
 - **Next.js 16 / React 19** pour l’interface ;
 - **TypeScript** pour le moteur d’analyse et les composants ;
 - **vinext / Vite** pour la construction ;
-- **Cloudflare D1** pour les synthèses historiques pseudonymisées ;
+- **Better Auth** pour les comptes, sessions, organisations, invitations et MFA ;
+- **Cloudflare D1** pour l’identité et les données métier isolées par organisation ;
+- **Resend** pour les courriels transactionnels ;
+- **Cloudflare Workers** pour l’hébergement autonome et le domaine personnalisé ;
 - aucune API distante requise pour l’analyse statique ; OSV reste optionnel.
 
 Principaux fichiers :
 
 ```text
 app/
-  page.tsx       Interface et orchestration des audits
+  page.tsx       Garde de session et chargement de l’organisation active
+  dashboard.tsx  Interface et orchestration des audits
   globals.css    Système visuel responsive
   layout.tsx     Métadonnées et partage social
-  api/exception-sync/route.ts Synchronisation SSO et journal d’écriture
+  settings/      Membres, rôles, invitations et MFA
+  api/auth/      API d’identité autonome
+  api/exception-sync/route.ts Synchronisation par organisation
 db/
-  schema.ts      Historique et enveloppes d’exceptions dans D1
+  schema.ts      Identité, organisations, historique et exceptions dans D1
 lib/
+  auth/            Configuration serveur/client, rôles et courriels
   audit-engine.ts  Règles, scoring et exports JSON/SARIF
   audit-history.ts Agrégation confidentielle et comparaison des audits
   finding-exceptions.ts Registre local et exports des risques acceptés
   trustmap-governance.ts Signature des politiques et bundles d’exceptions chiffrés
   enterprise-sync.ts Chiffrement par clé de données et pseudonymisation
   enterprise-authorization.ts Rôles et double approbation côté serveur
-  key-management.ts Enveloppe de clés Sites ou passerelle KMS HTTPS
+  key-management.ts Enveloppe de clés de l’hébergeur ou passerelle KMS HTTPS
   collector.ts     Découverte, redaction et probe MCP passif
   lockfiles.ts     Graphes package-lock, pnpm, Yarn, uv et Poetry
   kubernetes-admission.ts Génération sûre des politiques d’admission
@@ -640,6 +668,10 @@ public/
 | `npm run dev` | Démarre l’application en développement |
 | `npm run build` | Produit et valide la version de production |
 | `npm run start` | Lance la version construite |
+| `npm run db:generate` | Génère une migration Drizzle après un changement de schéma |
+| `npm run db:migrate:local` | Applique les migrations à la base D1 locale |
+| `npm run db:migrate:remote` | Applique les migrations à la base D1 de production |
+| `npm run deploy:standalone` | Construit et déploie le Worker autonome |
 | `npm run collect` | Produit un inventaire local assaini |
 | `npm run audit:ci -- --path <fichier>` | Bloque la CI sur les constats critiques ou élevés |
 | `npm run collect:sbom` | Produit l’inventaire et le SBOM CycloneDX |
@@ -768,16 +800,16 @@ fusion. Les décisions sont rapprochées par identifiant et une révocation gagn
 toujours sur une version active, ce qui évite de réactiver un risque déjà
 refusé. Aucune phrase secrète n’est persistée par l’application.
 
-### Synchronisation automatique avec SSO et KMS
+### Synchronisation autonome par organisation et KMS
 
 Dans **TrustMap Enterprise → Espace partagé**, le navigateur se connecte à
-`/api/exception-sync`. L’API accepte uniquement une identité transmise par la
-plateforme dans l’en-tête authentifié, ou l’identité spéciale de l’aperçu local.
-Chaque écriture est attribuée à une empreinte SHA-256 pseudonymisée ; l’adresse
-e-mail n’est pas inscrite dans D1.
+`/api/exception-sync`. L’API accepte uniquement une session MCP TrustMap valide
+et vérifie son appartenance à l’organisation active directement dans D1. Chaque
+écriture est attribuée à une empreinte SHA-256 pseudonymisée propre au membre et
+à l’organisation ; l’adresse e-mail n’est pas inscrite dans le registre métier.
 
-Un site privé représente un espace de confiance. Les membres explicitement
-autorisés par la politique d’accès Sites partagent le même registre. La
+Chaque organisation cliente représente un espace de confiance séparé. Un membre
+ne lit et ne modifie que le registre de son organisation active. La
 synchronisation :
 
 - fusionne les décisions sans supprimer celles absentes d’un appareil ;
@@ -789,8 +821,9 @@ synchronisation :
 
 ### Rôles Enterprise et approbation critique
 
-`TRUSTMAP_ROLE_BINDINGS` est un secret JSON qui associe les adresses SSO aux
-rôles. Toute identité absente de cette table reçoit le rôle `reader`.
+Les rôles sont stockés dans l’appartenance de chaque membre à une organisation.
+Un `Admin` les attribue depuis **Paramètres → Membres et rôles** et peut inviter
+une adresse vérifiée par courriel.
 
 | Rôle | Lire | Synchroniser/révoquer | Approuver | Rejeter |
 | --- | --- | --- | --- | --- |
@@ -812,8 +845,8 @@ la date et l’empreinte de l’acteur.
 
 Deux fournisseurs sont disponibles :
 
-1. **secret de plateforme**, utilisé par le site privé actuel : une clé
-   d’enveloppe de 32 octets est stockée comme secret Sites ;
+1. **secret de plateforme**, utilisé par l’hébergement autonome : une clé
+   d’enveloppe de 32 octets est stockée comme secret du Worker ;
 2. **passerelle KMS externe**, qui reçoit des opérations `wrap` et `unwrap` sur
    HTTPS avec un identifiant de clé et un jeton conservé comme secret.
 
@@ -824,6 +857,44 @@ synchronisation réenveloppe automatiquement une décision encore protégée par
 une ancienne version. Les
 variables attendues et leurs formes sont documentées dans `.env.example` sans
 aucune valeur secrète.
+
+## Déploiement autonome avec domaine personnalisé
+
+Le modèle `wrangler.example.jsonc` déploie MCP TrustMap sur Cloudflare Workers,
+relie D1 et configure un domaine personnalisé. Le domaine doit appartenir à une
+zone Cloudflare de votre compte.
+
+```powershell
+Copy-Item wrangler.example.jsonc wrangler.local.jsonc
+npx wrangler login
+npx wrangler d1 create mcp-trustmap-production
+```
+
+Reportez le `database_id` retourné dans `wrangler.local.jsonc`, puis remplacez
+`app.votre-domaine.tld` dans `routes`, `BETTER_AUTH_URL` et
+`TRUSTMAP_EMAIL_FROM`. Les valeurs sensibles restent hors du fichier :
+
+```powershell
+npx wrangler secret put BETTER_AUTH_SECRET
+npx wrangler secret put RESEND_API_KEY
+npx wrangler secret put TRUSTMAP_KMS_MASTER_KEY
+# Seulement si une passerelle KMS externe est utilisée :
+npx wrangler secret put TRUSTMAP_KMS_BEARER_TOKEN
+```
+
+`BETTER_AUTH_SECRET` et `TRUSTMAP_KMS_MASTER_KEY` doivent chacun être des valeurs
+aléatoires indépendantes d’au moins 32 octets. Appliquez enfin le schéma avant le
+premier déploiement :
+
+```powershell
+npm run db:migrate:remote
+npm run deploy:standalone
+```
+
+Cloudflare crée le routage DNS et le certificat TLS du domaine personnalisé.
+Le déploiement de production refuse de démarrer sans `BETTER_AUTH_SECRET`; la
+journalisation locale des liens d’e-mail est explicitement désactivée dans le
+modèle de production.
 
 ## Limites actuelles
 
@@ -850,11 +921,10 @@ aucune valeur secrète.
   OAuth ou système de fichiers ;
 - l’historique est limité à 60 synthèses agrégées et ne permet pas de rouvrir
   l’inventaire complet d’un audit précédent ;
-- la politique d’accès Sites définit les membres de l’espace ; l’application ne
-  fournit pas encore d’interface d’invitation et les rôles sont configurés par
-  le secret `TRUSTMAP_ROLE_BINDINGS` ;
-- un espace privé limité à une seule identité ne peut pas achever une double
-  approbation : deux auditeurs distincts du demandeur doivent être autorisés ;
+- l’envoi des vérifications, invitations et récupérations nécessite une clé
+  Resend et un domaine d’expédition vérifié ;
+- une organisation limitée à une seule identité ne peut pas achever une double
+  approbation : deux auditeurs distincts du demandeur doivent être membres ;
 - la passerelle KMS externe suit le contrat HTTPS MCP TrustMap et nécessite un
   adaptateur devant AWS KMS, Azure Key Vault, Google Cloud KMS ou un HSM ;
 - l’empreinte d’une identité de signature doit être validée par un canal
@@ -864,9 +934,10 @@ aucune valeur secrète.
 
 ## Prochaines étapes possibles
 
-- interface d’administration des membres et rôles reliée à un annuaire ;
+- fédération SAML/OIDC et provisionnement SCIM pour les grands comptes ;
+- clés d’accès matérielles WebAuthn en complément du TOTP ;
 - adaptateurs KMS natifs et migration automatique lors de la rotation ;
-- clés de signature matérielles WebAuthn ou gérées par un HSM d’entreprise.
+- clés de signature gérées par un HSM d’entreprise.
 
 ## Contribution
 

@@ -13,7 +13,6 @@ import {
   EnterpriseAuthorizationError,
   normalizeStoredRiskException,
   prepareRiskExceptionForSync,
-  resolveEnterpriseRole,
   roleCapabilities,
   type EnterpriseActor,
   type ExceptionDecision,
@@ -26,13 +25,10 @@ import {
   createKeyManagementProvider,
   KeyManagementConfigurationError,
 } from "../../../lib/key-management";
+import { getAuthContext } from "../../../lib/auth/server";
 
 export const dynamic = "force-dynamic";
 
-const AUTHENTICATED_EMAIL_HEADER = "oai-authenticated-user-email";
-const AUTHENTICATED_NAME_HEADER = "oai-authenticated-user-full-name";
-const AUTHENTICATED_NAME_ENCODING_HEADER =
-  "oai-authenticated-user-full-name-encoding";
 const MAX_REQUEST_BYTES = 1_500_000;
 const MAX_SYNCED_EXCEPTIONS = 1_000;
 const runtime = env as unknown as Record<string, unknown>;
@@ -56,12 +52,6 @@ function responseJson(body: unknown, status = 200): Response {
   });
 }
 
-function isLocalRequest(request: Request): boolean {
-  return ["localhost", "127.0.0.1", "::1"].includes(
-    new URL(request.url).hostname,
-  );
-}
-
 function sameOrigin(request: Request): boolean {
   const origin = request.headers.get("Origin");
   if (!origin) return false;
@@ -72,58 +62,21 @@ function sameOrigin(request: Request): boolean {
   }
 }
 
-async function sha256(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(value),
-  );
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function decodeDisplayName(request: Request): string | null {
-  const encoded = request.headers.get(AUTHENTICATED_NAME_HEADER);
-  if (
-    !encoded ||
-    request.headers.get(AUTHENTICATED_NAME_ENCODING_HEADER) !==
-      "percent-encoded-utf-8"
-  ) {
-    return null;
-  }
-  try {
-    return decodeURIComponent(encoded).slice(0, 120);
-  } catch {
-    return null;
-  }
-}
-
 async function authenticatedActor(
   request: Request,
-): Promise<EnterpriseActor | null> {
-  const email = request.headers
-    .get(AUTHENTICATED_EMAIL_HEADER)
-    ?.trim()
-    .toLowerCase();
-  const localPreview = isLocalRequest(request);
-  const identity = email || (localPreview ? "local-preview" : "");
-  if (!identity) return null;
+): Promise<(EnterpriseActor & { organizationId: string }) | null> {
+  const context = await getAuthContext(request.headers);
+  if (!context) return null;
   return {
-    actorHash: await sha256(`mcp-trustmap:exception-sync:actor:${identity}`),
-    displayName:
-      decodeDisplayName(request) ??
-      (email ? email.slice(0, 160) : "Aperçu local"),
-    role: resolveEnterpriseRole(email ?? null, runtime, localPreview),
+    actorHash: context.actorHash,
+    displayName: context.displayName,
+    organizationId: context.organizationId,
+    role: context.role,
   };
 }
 
-async function workspaceId(): Promise<string> {
-  const configured = runtime.TRUSTMAP_WORKSPACE_ID;
-  return createExceptionSpaceId(
-    typeof configured === "string" && configured.trim()
-      ? configured
-      : "primary-private-site",
-  );
+async function workspaceId(organizationId: string): Promise<string> {
+  return createExceptionSpaceId(`organization:${organizationId}`);
 }
 
 async function readExceptions(request: Request): Promise<RiskException[]> {
@@ -469,7 +422,6 @@ async function trimAuditEvents(spaceId: string) {
 }
 
 async function syncMetadata(
-  request: Request,
   actor: EnterpriseActor,
   spaceId: string,
 ) {
@@ -495,7 +447,7 @@ async function syncMetadata(
     lastActivityAt: event?.created_at
       ? new Date(event.created_at).toISOString()
       : null,
-    localPreview: isLocalRequest(request),
+    localPreview: false,
   };
 }
 
@@ -503,14 +455,14 @@ export async function GET(request: Request) {
   try {
     const actor = await authenticatedActor(request);
     if (!actor) {
-      return responseJson({ error: "Authentification SSO requise." }, 401);
+      return responseJson({ error: "Authentification MCP TrustMap requise." }, 401);
     }
     await ensureExceptionSyncSchema();
-    const spaceId = await workspaceId();
+    const spaceId = await workspaceId(actor.organizationId);
     const shared = await listSharedExceptions(spaceId);
     return responseJson({
       ...shared,
-      sync: await syncMetadata(request, actor, spaceId),
+      sync: await syncMetadata(actor, spaceId),
     });
   } catch (error) {
     const configuration = error instanceof KeyManagementConfigurationError;
@@ -532,7 +484,7 @@ export async function PUT(request: Request) {
     }
     const actor = await authenticatedActor(request);
     if (!actor) {
-      return responseJson({ error: "Authentification SSO requise." }, 401);
+      return responseJson({ error: "Authentification MCP TrustMap requise." }, 401);
     }
     if (!roleCapabilities(actor.role).canSync) {
       return responseJson(
@@ -542,7 +494,7 @@ export async function PUT(request: Request) {
     }
     const incoming = await readExceptions(request);
     await ensureExceptionSyncSchema();
-    const spaceId = await workspaceId();
+    const spaceId = await workspaceId(actor.organizationId);
     let changed = 0;
     for (const exception of incoming) {
       if (await upsertException(spaceId, actor, exception)) changed += 1;
@@ -552,7 +504,7 @@ export async function PUT(request: Request) {
     return responseJson({
       ...shared,
       changed,
-      sync: await syncMetadata(request, actor, spaceId),
+      sync: await syncMetadata(actor, spaceId),
     });
   } catch (error) {
     if (error instanceof EnterpriseAuthorizationError) {
@@ -581,11 +533,11 @@ export async function PATCH(request: Request) {
     }
     const actor = await authenticatedActor(request);
     if (!actor) {
-      return responseJson({ error: "Authentification SSO requise." }, 401);
+      return responseJson({ error: "Authentification MCP TrustMap requise." }, 401);
     }
     const decision = await readDecision(request);
     await ensureExceptionSyncSchema();
-    const spaceId = await workspaceId();
+    const spaceId = await workspaceId(actor.organizationId);
     await applyStoredDecision(
       spaceId,
       actor,
@@ -597,7 +549,7 @@ export async function PATCH(request: Request) {
     return responseJson({
       ...shared,
       changed: 1,
-      sync: await syncMetadata(request, actor, spaceId),
+      sync: await syncMetadata(actor, spaceId),
     });
   } catch (error) {
     if (error instanceof EnterpriseAuthorizationError) {

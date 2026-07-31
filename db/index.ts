@@ -24,6 +24,7 @@ export function ensureAuditHistorySchema(): Promise<void> {
       getD1().prepare(`
         CREATE TABLE IF NOT EXISTS audit_history (
           id TEXT PRIMARY KEY NOT NULL,
+          organization_id TEXT NOT NULL,
           actor_hash TEXT NOT NULL,
           created_at INTEGER NOT NULL,
           source TEXT NOT NULL,
@@ -38,8 +39,8 @@ export function ensureAuditHistorySchema(): Promise<void> {
         )
       `),
       getD1().prepare(`
-        CREATE INDEX IF NOT EXISTS audit_history_actor_created_idx
-        ON audit_history (actor_hash, created_at)
+        CREATE INDEX IF NOT EXISTS audit_history_organization_created_idx
+        ON audit_history (organization_id, created_at)
       `),
     ])
     .then(() => undefined)

@@ -263,7 +263,7 @@ export function TrustMapEnterprise({
       <article className="module-card automatic-sync-card">
         <div className="module-card-head">
           <div>
-            <span className="section-kicker">ESPACE PARTAGÉ · SSO</span>
+            <span className="section-kicker">ESPACE PARTAGÉ · ORGANISATION</span>
             <h3>Synchronisation automatique des décisions</h3>
           </div>
           <span className={`sync-state ${sharedSync.phase}`}>
@@ -284,7 +284,7 @@ export function TrustMapEnterprise({
         </p>
         <div className="sync-facts">
           <div>
-            <span>Identité SSO</span>
+            <span>Identité MCP TrustMap</span>
             <strong>{sharedSync.identity || "Non authentifiée"}</strong>
           </div>
           <div>
